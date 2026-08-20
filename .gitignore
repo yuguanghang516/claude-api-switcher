@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# 敏感数据与运行状态 - 永远不要提交
+data/
+logs/
+backups/
+.env
+.env.*
+!.env.example
+.claude/
+*.lnk
+
+# 数据库
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# PyInstaller
+build/
+dist/
+release/
+*.spec
+!build.spec
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 系统
+Thumbs.db
+.DS_Store

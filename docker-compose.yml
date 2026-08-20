@@ -1,0 +1,44 @@
+# AI Router V3 - Docker Compose 配置
+# 使用方法:
+#   docker-compose up -d        # 启动
+#   docker-compose down         # 停止
+#   docker-compose logs -f      # 查看日志
+#   docker-compose pull         # 更新镜像
+
+version: '3.8'
+
+services:
+  ai-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-router-v3
+    restart: unless-stopped
+    # 默认只从本机访问。需要局域网访问时请显式修改绑定地址并配置防火墙。
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/app/data          # 数据持久化
+    environment:
+      - TZ=Asia/Shanghai
+      - PYTHONUNBUFFERED=1
+      - WEB_PORT=8080
+      - DATA_DIR=/app/data
+      - LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - ai-router-net
+
+networks:
+  ai-router-net:
+    driver: bridge

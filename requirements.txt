@@ -1,0 +1,15 @@
+# AI Router V3 依赖
+# 核心依赖
+customtkinter>=5.2.0
+keyring>=24.0.0
+requests>=2.31.0
+flask>=3.0.0
+
+# V3 Web 控制面板 (可选)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.0.0
+
+# 通知 (可选)
+# win10toast>=0.9; sys_platform == "win32"
+# plyer>=2.1.0
