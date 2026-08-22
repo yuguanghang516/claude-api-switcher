@@ -25,7 +25,8 @@ DEFAULT_PROVIDERS: List[Dict[str, Any]] = [
         "enabled": True,
         "priority": 1,
         "is_fallback": False,
-        "auth_mode": "bearer"
+        "auth_mode": "bearer",
+        "provider_kind": "longcat",
     },
     {
         "name": "DeepSeek",
@@ -35,7 +36,8 @@ DEFAULT_PROVIDERS: List[Dict[str, Any]] = [
         "enabled": False,
         "priority": 2,
         "is_fallback": False,
-        "auth_mode": "bearer"
+        "auth_mode": "bearer",
+        "provider_kind": "custom",
     }
 ]
 
@@ -102,6 +104,7 @@ class ConfigManager:
                 provider["id"] = uuid.uuid4().hex
                 provider["legacy_credential_name"] = provider.get("name", "")
             provider.setdefault("auth_mode", "bearer")
+            provider.setdefault("provider_kind", "custom")
             provider.setdefault("enabled", True)
             provider.setdefault("priority", 99)
             provider.setdefault("is_fallback", False)

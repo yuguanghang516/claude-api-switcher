@@ -31,8 +31,14 @@ SUPPORTED_PROVIDERS = {
     },
     "google": {
         "name": "Google Gemini",
-        "base_url": "https://generativelanguage.googleapis.com/v1beta",
-        "models": ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash"],
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": ["gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-pro"],
+        "auth_mode": "bearer",
+    },
+    "gcli2api": {
+        "name": "Gemini CLI 反代 (gcli2api)",
+        "base_url": "http://127.0.0.1:7861/v1",
+        "models": ["gemini-2.5-pro"],
         "auth_mode": "bearer",
     },
     "deepseek": {

@@ -233,6 +233,13 @@ class TestGatewayServer:
         assert "anthropic" in SUPPORTED_PROVIDERS
         assert "deepseek" in SUPPORTED_PROVIDERS
         assert "longcat" in SUPPORTED_PROVIDERS
+        assert SUPPORTED_PROVIDERS["google"]["base_url"].endswith("/v1beta/openai")
+        assert SUPPORTED_PROVIDERS["gcli2api"] == {
+            "name": "Gemini CLI 反代 (gcli2api)",
+            "base_url": "http://127.0.0.1:7861/v1",
+            "models": ["gemini-2.5-pro"],
+            "auth_mode": "bearer",
+        }
         assert "custom" in SUPPORTED_PROVIDERS
 
     def test_gateway_init(self, gateway):

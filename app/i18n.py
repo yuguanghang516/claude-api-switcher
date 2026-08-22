@@ -30,6 +30,25 @@ TEXTS = {
         "en": "Import",
     },
 
+    # === gcli2api / Gemini 反代 ===
+    "gcli_title": {
+        "zh": "Gemini 反代 · gcli2api",
+        "en": "Gemini Proxy · gcli2api",
+    },
+    "gcli_subtitle": {
+        "zh": "安装、检测并连接独立的 gcli2api 服务；支持 Claude、OpenAI 与 Gemini 三种调用格式。",
+        "en": "Install, detect, and connect the independent gcli2api service with Claude, OpenAI, and Gemini-compatible APIs.",
+    },
+    "gcli_password": {"zh": "API 密码", "en": "API Password"},
+    "gcli_model": {"zh": "默认模型", "en": "Default Model"},
+    "gcli_detect": {"zh": "检测服务", "en": "Check"},
+    "gcli_install": {"zh": "一键安装", "en": "Install"},
+    "gcli_start": {"zh": "启动服务", "en": "Start"},
+    "gcli_panel": {"zh": "打开面板", "en": "Open Panel"},
+    "gcli_add_claude": {"zh": "添加到 Claude", "en": "Add to Claude"},
+    "gcli_add_gateway": {"zh": "添加到网关", "en": "Add to Gateway"},
+    "gcli_examples": {"zh": "调用示例", "en": "Examples"},
+
     # === 当前状态 ===
     "current_status": {
         "zh": "当前状态",
@@ -667,7 +686,7 @@ TEXTS = {
     "provider_updated": {"zh": "供应商更新成功", "en": "Provider updated"},
     "provider_deleted": {"zh": "供应商已删除", "en": "Provider deleted"},
     "confirm_delete_provider": {"zh": "确定删除供应商 '{}' 吗？相关模型也会被删除。", "en": "Delete provider '{}'? Related models will also be deleted."},
-    "api_key_encrypted": {"zh": "API Key 已加密存储", "en": "API Key stored encrypted"},
+    "api_key_encrypted": {"zh": "API Key 仅保存在本机网关数据库，请勿上传数据目录", "en": "API Key stays in the local gateway database; never upload the data directory"},
     "custom_provider": {"zh": "自定义", "en": "Custom"},
 
     # === 请求日志 ===

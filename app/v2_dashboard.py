@@ -105,7 +105,7 @@ class V2DashboardPanel:
 
         self.refresh_balance_btn = ctk.CTkButton(
             head, text="刷新", width=60, height=28,
-            fg_color=BG_ELEVATED, hover_color=BORDER,
+            fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             font=ctk.CTkFont(size=10),
             command=self._refresh_balance)
         self.refresh_balance_btn.pack(side="right")
@@ -207,7 +207,7 @@ class V2DashboardPanel:
 
         self.reset_failover_btn = ctk.CTkButton(
             head, text="重置", width=60, height=28,
-            fg_color=BG_ELEVATED, hover_color=BORDER,
+            fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             font=ctk.CTkFont(size=10),
             command=self._reset_failover)
         self.reset_failover_btn.pack(side="right")

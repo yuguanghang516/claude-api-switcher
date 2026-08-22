@@ -12,7 +12,8 @@ from .credential_manager import CredentialManager
 
 
 EXPORT_FIELDS = (
-    "name", "base_url", "model", "small_fast_model", "enabled", "auth_mode"
+    "name", "base_url", "model", "small_fast_model", "enabled", "auth_mode",
+    "provider_kind",
 )
 
 
@@ -88,6 +89,7 @@ class ProviderManager:
         self, name: str, base_url: str, model: str, small_fast_model: str,
         api_key: str, enabled: bool = True, priority: int = 99,
         is_fallback: bool = False, old_name: str = "", auth_mode: str = "bearer",
+        provider_kind: str = "custom",
     ) -> Tuple[bool, str]:
         ok, message = self._validate_fields(name, base_url, model, priority)
         if not ok:
@@ -97,6 +99,7 @@ class ProviderManager:
         model = model.strip()
         small_fast_model = small_fast_model.strip() if small_fast_model else model
         auth_mode = auth_mode if auth_mode in {"bearer", "x-api-key"} else "bearer"
+        provider_kind = provider_kind.strip().lower() if provider_kind else "custom"
 
         existing = self.config.get_provider(old_name) if old_name else None
         conflict = self.config.get_provider(name)
@@ -116,6 +119,7 @@ class ProviderManager:
             "priority": priority,
             "is_fallback": False,
             "auth_mode": auth_mode,
+            "provider_kind": provider_kind,
         }
         if existing and existing.get("legacy_credential_name"):
             provider_data["legacy_credential_name"] = existing["legacy_credential_name"]
@@ -246,6 +250,7 @@ class ProviderManager:
                     "priority": priority,
                     "is_fallback": False,
                     "auth_mode": item.get("auth_mode") if item.get("auth_mode") in {"bearer", "x-api-key"} else "bearer",
+                    "provider_kind": str(item.get("provider_kind") or "custom").strip().lower(),
                 })
             new_config = copy.deepcopy(self.config.config)
             new_config["providers"] = clean

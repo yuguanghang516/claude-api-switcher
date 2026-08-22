@@ -284,7 +284,7 @@ class BalanceChecker:
     def _check_google_balance(self, api_key: str, base_url: str = "") -> BalanceInfo:
         """检测 Google 额度（Google 没有直接余额 API，通过验证 Key 判断）"""
         url = "https://generativelanguage.googleapis.com/v1beta/models"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = {"x-goog-api-key": api_key}
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)

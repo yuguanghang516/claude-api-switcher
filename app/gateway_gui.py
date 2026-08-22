@@ -120,6 +120,7 @@ class GatewayPanel:
 
         self.copy_btn = ctk.CTkButton(url_row, text=t("copy_url", self.lang), width=70, height=26,
                                        fg_color=BG_ELEVATED, hover_color=BORDER,
+                                       text_color=TEXT_PRIMARY,
                                        font=ctk.CTkFont(size=10),
                                        command=self._copy_url)
         self.copy_btn.pack(side="right")
@@ -138,7 +139,7 @@ class GatewayPanel:
         # 使用说明
         info_btn = ctk.CTkButton(
             btn_row, text="ℹ", width=36, height=36,
-            fg_color=BG_ELEVATED, hover_color=BORDER,
+            fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             command=self._show_info)
         info_btn.pack(side="left")
 
@@ -270,7 +271,7 @@ class GatewayPanel:
 
         toggle_text = t("disabled", self.lang) if is_enabled else t("enabled", self.lang)
         ctk.CTkButton(actions, text=toggle_text, width=50, height=24,
-                      fg_color=BG_ELEVATED, hover_color=BORDER,
+                      fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
                       font=ctk.CTkFont(size=9),
                       command=lambda m=model: self._toggle_model(m)).pack(side="left", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=40, height=24,
@@ -294,7 +295,7 @@ class GatewayPanel:
 
         self.refresh_log_btn = ctk.CTkButton(
             head, text=t("refresh_logs", self.lang), width=60, height=24,
-            fg_color=BG_ELEVATED, hover_color=BORDER,
+            fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             font=ctk.CTkFont(size=10), command=self._refresh_logs)
         self.refresh_log_btn.pack(side="right", padx=PAD_XS)
 
@@ -494,7 +495,8 @@ class ModelDialog:
         buttons = ctk.CTkFrame(body, fg_color="transparent")
         buttons.pack(fill="x", pady=PAD_MD)
         ctk.CTkButton(buttons, text=t("cancel", self.lang), fg_color=BG_ELEVATED,
-                      hover_color=BORDER, command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
+                      hover_color=BORDER, text_color=TEXT_PRIMARY,
+                      command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
         ctk.CTkButton(buttons, text=t("save", self.lang), fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self._save).pack(side="right", expand=True, fill="x", padx=(PAD_SM, 0))
 

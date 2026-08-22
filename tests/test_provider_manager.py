@@ -62,6 +62,20 @@ class TestProviderManager:
         assert success is True
         assert mgr.config.get_provider("TestAPI") is not None
 
+    def test_gcli2api_kind_is_preserved(self, manager):
+        """gcli2api 专用类型可保存，并随无密钥导出保留。"""
+        mgr, _ = manager
+        success, _ = mgr.add_or_update_provider(
+            name="Gemini CLI (gcli2api)",
+            base_url="http://127.0.0.1:7861",
+            model="gemini-2.5-pro",
+            small_fast_model="gemini-2.5-flash",
+            api_key="local-password",
+            provider_kind="gcli2api",
+        )
+        assert success is True
+        assert mgr.config.get_provider("Gemini CLI (gcli2api)")["provider_kind"] == "gcli2api"
+
     def test_add_provider_missing_name_fails(self, manager):
         """缺少名称时添加失败"""
         mgr, store = manager

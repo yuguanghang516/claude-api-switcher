@@ -2,6 +2,7 @@
 import os
 import queue
 import threading
+import webbrowser
 from datetime import datetime
 from typing import Optional
 import customtkinter as ctk
@@ -22,6 +23,7 @@ from .v2_dashboard import V2DashboardPanel
 from .v2_config import V2ConfigManager
 from .gateway_server_v2 import GatewayServerV2
 from .claude_environment import ClaudeEnvironmentManager
+from .gcli2api_manager import Gcli2ApiManager, Gcli2ApiStatus, DEFAULT_BASE_URL
 from .theme import LIGHT, DARK, theme
 from .version import APP_VERSION_NAME, app_title
 
@@ -45,6 +47,8 @@ TEXT_PRIMARY = (LIGHT.text_primary, DARK.text_primary)
 TEXT_SECONDARY = (LIGHT.text_secondary, DARK.text_secondary)
 TEXT_MUTED = (LIGHT.text_muted, DARK.text_muted)
 BORDER = (LIGHT.border, DARK.border)
+GEMINI_ACCENT = ("#6D4AFF", "#A78BFA")
+GEMINI_HOVER = ("#5936E8", "#8B5CF6")
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_MONO = "Consolas"
 PAD_XS, PAD_SM, PAD_MD, PAD_LG, PAD_XL = 4, 8, 12, 16, 24
@@ -60,6 +64,12 @@ class MainWindow:
         self.project_resolver = ProjectDirectoryResolver()
         self.claude_command_resolver = ClaudeCommandResolver()
         self.claude_environment = ClaudeEnvironmentManager()
+        self.gcli2api = Gcli2ApiManager(data_dir, logger=self.logger)
+        self._gcli_status = Gcli2ApiStatus(
+            state="unknown", base_url=DEFAULT_BASE_URL,
+            install_dir=self.gcli2api.install_dir,
+            message="等待检测")
+        self._gcli_busy = False
         self._environment_queue = queue.Queue()
         self._environment_busy = False
         self.lang = self.config.get_language() or "zh"
@@ -97,6 +107,7 @@ class MainWindow:
         self.root.after(100, self._poll_test_results)
         self.root.after(150, self._poll_environment_results)
         self.root.after(350, self._detect_claude_environment)
+        self.root.after(700, self._detect_gcli2api)
 
         # 窗口关闭时清理网关
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -116,6 +127,11 @@ class MainWindow:
         try:
             if hasattr(self, 'gateway') and self.gateway.is_running():
                 self.gateway.stop()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, 'gcli2api'):
+                self.gcli2api.stop_managed()
         except Exception:
             pass
         self.root.destroy()
@@ -164,6 +180,7 @@ class MainWindow:
         self.main_frame.pack(fill="both", expand=True, padx=PAD_LG, pady=PAD_LG)
         self._build_header()
         self._build_status_and_quick_launch()
+        self._build_gcli2api_section()
         self._build_provider_section()
         self._build_log_section()
 
@@ -217,11 +234,13 @@ class MainWindow:
         self.export_btn = self._bind_text(ctk.CTkButton(
             right, text="", width=64, height=30, fg_color=BG_ELEVATED,
             hover_color=BORDER, border_width=1, border_color=BORDER,
+            text_color=TEXT_PRIMARY,
             command=self._export_config), "export")
         self.export_btn.pack(side="left", padx=PAD_XS)
         self.import_btn = self._bind_text(ctk.CTkButton(
             right, text="", width=64, height=30, fg_color=BG_ELEVATED,
             hover_color=BORDER, border_width=1, border_color=BORDER,
+            text_color=TEXT_PRIMARY,
             command=self._import_config), "import")
         self.import_btn.pack(side="left", padx=PAD_XS)
 
@@ -260,7 +279,8 @@ class MainWindow:
             fg_color=BG_INPUT, border_color=BORDER, text_color=TEXT_PRIMARY)
         self.browse_btn = self._bind_text(ctk.CTkButton(
             project_row, text="", width=76, height=34, fg_color=BG_ELEVATED,
-            hover_color=BORDER, command=self._browse_project_dir), "browse")
+            hover_color=BORDER, text_color=TEXT_PRIMARY,
+            command=self._browse_project_dir), "browse")
         self.browse_btn.pack(side="right")
         self.project_source_label = ctk.CTkLabel(
             project_row, text="", width=82, font=ctk.CTkFont(size=10),
@@ -287,6 +307,296 @@ class MainWindow:
         value = ctk.CTkLabel(parent, text="—", anchor="w", text_color=TEXT_PRIMARY)
         value.grid(row=row, column=1, sticky="ew", pady=PAD_XS)
         return value
+
+    def _build_gcli2api_section(self):
+        """Build the optional Gemini CLI reverse-proxy control card."""
+        card = ctk.CTkFrame(
+            self.main_frame, fg_color=BG_SURFACE, corner_radius=12,
+            border_width=1, border_color=GEMINI_ACCENT)
+        card.pack(fill="x", pady=(0, PAD_LG))
+        card.grid_columnconfigure(1, weight=1)
+
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.grid(row=0, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+                  pady=(PAD_LG, PAD_XS))
+        self.gcli_title_label = self._bind_text(ctk.CTkLabel(
+            head, text="", font=ctk.CTkFont(size=15, weight="bold"),
+            text_color=GEMINI_ACCENT), "gcli_title")
+        self.gcli_title_label.pack(side="left")
+        self.gcli_state_label = ctk.CTkLabel(
+            head, text="○ 等待检测", font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=TEXT_MUTED)
+        self.gcli_state_label.pack(side="right")
+
+        self.gcli_subtitle_label = self._bind_text(ctk.CTkLabel(
+            card, text="", anchor="w", justify="left", wraplength=900,
+            font=ctk.CTkFont(size=10), text_color=TEXT_MUTED), "gcli_subtitle")
+        self.gcli_subtitle_label.grid(row=1, column=0, columnspan=4, sticky="ew",
+                                     padx=PAD_LG, pady=(0, PAD_MD))
+
+        credential = ctk.CTkFrame(card, fg_color=BG_ELEVATED, corner_radius=8)
+        credential.grid(row=2, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+                        pady=(0, PAD_MD))
+        credential.grid_columnconfigure(1, weight=1)
+        self.gcli_password_label = self._bind_text(ctk.CTkLabel(
+            credential, text="", text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(size=10)), "gcli_password")
+        self.gcli_password_label.grid(row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
+        self.gcli_password_var = ctk.StringVar(value="")
+        self.gcli_password_entry = ctk.CTkEntry(
+            credential, textvariable=self.gcli_password_var, show="•", height=34,
+            fg_color=BG_INPUT, border_color=BORDER)
+        self.gcli_password_entry.grid(row=0, column=1, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
+        self.gcli_model_label = self._bind_text(ctk.CTkLabel(
+            credential, text="", text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(size=10)), "gcli_model")
+        self.gcli_model_label.grid(row=0, column=2, sticky="w", padx=(0, PAD_SM), pady=PAD_SM)
+        self.gcli_model_var = ctk.StringVar(value="gemini-2.5-pro")
+        self.gcli_model_combo = ctk.CTkComboBox(
+            credential, values=["gemini-2.5-pro"], variable=self.gcli_model_var,
+            width=230, height=34, fg_color=BG_INPUT, border_color=BORDER)
+        self.gcli_model_combo.grid(row=0, column=3, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
+
+        self.gcli_detail_label = ctk.CTkLabel(
+            card, text=f"{DEFAULT_BASE_URL}  ·  {self.gcli2api.install_dir}",
+            anchor="w", justify="left", wraplength=900, text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_MONO, size=9))
+        self.gcli_detail_label.grid(row=3, column=0, columnspan=4, sticky="ew",
+                                   padx=PAD_LG, pady=(0, PAD_SM))
+
+        actions = ctk.CTkFrame(card, fg_color="transparent")
+        actions.grid(row=4, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+                     pady=(0, PAD_LG))
+        for column in range(4):
+            actions.grid_columnconfigure(column, weight=1, uniform="gcli-actions")
+        self.gcli_action_buttons = []
+        button_specs = [
+            ("gcli_detect", self._detect_gcli2api, BG_ELEVATED, BORDER),
+            ("gcli_install", self._install_gcli2api, GEMINI_ACCENT, GEMINI_HOVER),
+            ("gcli_start", self._start_gcli2api, SUCCESS, SUCCESS_DARK),
+            ("gcli_panel", self._open_gcli2api_panel, INFO, INFO_DARK),
+            ("gcli_add_claude", self._add_gcli2api_to_claude, GEMINI_ACCENT, GEMINI_HOVER),
+            ("gcli_add_gateway", self._add_gcli2api_to_gateway, BG_ELEVATED, BORDER),
+            ("gcli_examples", self._show_gcli2api_examples, BG_ELEVATED, BORDER),
+        ]
+        for index, (key, command, color, hover) in enumerate(button_specs):
+            button = self._bind_text(ctk.CTkButton(
+                actions, text="", height=34, fg_color=color, hover_color=hover,
+                text_color=TEXT_PRIMARY if color == BG_ELEVATED else ACCENT_TEXT,
+                command=command), key)
+            button.grid(
+                row=index // 4, column=index % 4, sticky="ew",
+                padx=(0 if index % 4 == 0 else PAD_XS, 0), pady=PAD_XS)
+            self.gcli_action_buttons.append(button)
+        github_button = ctk.CTkButton(
+            actions, text="GitHub", width=64, height=34, fg_color="transparent",
+            border_width=1, border_color=BORDER, hover_color=BG_ELEVATED,
+            text_color=TEXT_PRIMARY,
+            command=lambda: webbrowser.open("https://github.com/su-kaka/gcli2api")
+        )
+        github_button.grid(row=1, column=3, sticky="ew", padx=(PAD_XS, 0), pady=PAD_XS)
+
+    def _set_gcli_busy(self, busy: bool, message: str = ""):
+        self._gcli_busy = busy
+        for button in getattr(self, "gcli_action_buttons", []):
+            button.configure(state="disabled" if busy else "normal")
+        if message:
+            self.gcli_state_label.configure(text=f"◌ {message}", text_color=INFO)
+
+    def _gcli_password(self) -> str:
+        return self.gcli_password_var.get().strip() if hasattr(self, "gcli_password_var") else ""
+
+    def _run_gcli_worker(self, worker, done, busy_text: str):
+        if self._gcli_busy:
+            return
+        self._set_gcli_busy(True, busy_text)
+
+        def run():
+            try:
+                result = worker()
+                self.root.after(0, done, result, None)
+            except Exception as exc:
+                self.root.after(0, done, None, str(exc)[:200])
+
+        threading.Thread(target=run, daemon=True, name="gcli2api-worker").start()
+
+    def _detect_gcli2api(self):
+        def done(status, error):
+            self._set_gcli_busy(False)
+            if error:
+                status = Gcli2ApiStatus(
+                    state="error", base_url=self.gcli2api.base_url,
+                    install_dir=self.gcli2api.install_dir,
+                    error_code="internal", message=f"检测失败：{error}")
+            self._gcli_status = status
+            self._render_gcli_status(status)
+
+        self._run_gcli_worker(
+            lambda: self.gcli2api.detect(self._gcli_password()), done,
+            self._ui("正在检测…", "Checking…"))
+
+    def _gcli_display_message(self, status: Gcli2ApiStatus) -> str:
+        if self.lang == "zh":
+            return status.message
+        messages = {
+            "connection_refused": "Service is not running or was not detected.",
+            "timeout": "Connection timed out. Check the proxy, firewall and service log.",
+            "dns": "Server not found. Check the address, network or DNS.",
+            "redirect": "The service redirected the request; stopped to protect the password.",
+            "auth_failed": "Wrong or missing API password. API_PASSWORD may differ from the panel password.",
+            "forbidden": "The Google account, project or credential lacks permission.",
+            "not_found": "The API address, endpoint or model does not exist.",
+            "rate_limited": "Credential quota is exhausted or rate-limited. Check the panel.",
+            "server_error": "gcli2api is temporarily unavailable.",
+            "no_models": "The service is running but has no models. Complete Google OAuth in the panel.",
+            "invalid_json": "The model endpoint returned invalid JSON.",
+            "request_error": "Request failed without exposing credentials.",
+        }
+        if status.ready:
+            return f"Ready · {len(status.models)} models"
+        return messages.get(status.error_code, status.message or "Waiting for status")
+
+    def _render_gcli_status(self, status: Gcli2ApiStatus):
+        colors = {
+            "ready": SUCCESS,
+            "stopped": TEXT_MUTED,
+            "not_installed": TEXT_MUTED,
+            "auth_required": ("#9A6700", "#FBBF24"),
+            "oauth_required": ("#9A6700", "#FBBF24"),
+            "error": DANGER,
+        }
+        names = {
+            "zh": {
+                "ready": "● 可以调用", "stopped": "○ 已安装，未运行",
+                "not_installed": "○ 未检测到", "auth_required": "● 需要 API 密码",
+                "oauth_required": "● 需要 Google OAuth", "error": "● 检测异常",
+            },
+            "en": {
+                "ready": "● Ready", "stopped": "○ Installed, stopped",
+                "not_installed": "○ Not detected", "auth_required": "● API password required",
+                "oauth_required": "● Google OAuth required", "error": "● Check failed",
+            },
+        }
+        self.gcli_state_label.configure(
+            text=names.get(self.lang, names["en"]).get(status.state, "○ Waiting"),
+            text_color=colors.get(status.state, TEXT_MUTED))
+        detail = self._gcli_display_message(status)
+        version = f" · {status.version}" if status.version else ""
+        self.gcli_detail_label.configure(
+            text=f"{status.base_url}{version}\n{detail}\n{status.install_dir}")
+        if status.models:
+            values = list(status.models)
+            self.gcli_model_combo.configure(values=values)
+            primary, _ = self.gcli2api.select_models(values)
+            current = self.gcli_model_var.get()
+            if current not in values:
+                self.gcli_model_var.set(primary)
+
+    def _install_gcli2api(self):
+        message = self._ui(
+            "将从 GitHub 安装独立第三方项目 gcli2api。缺少依赖时会通过 WinGet 安装 Git.Git 和 astral-sh.uv。不会执行远程脚本文本、修改 PowerShell 策略或捆绑 OAuth 凭据。gcli2api 使用 CNC-1.0 非商业许可证。是否继续？",
+            "This installs the independent third-party gcli2api project from GitHub. Missing Git.Git and astral-sh.uv may be installed with WinGet. No remote script text, PowerShell policy change, or OAuth credential is bundled. gcli2api uses the CNC-1.0 non-commercial license. Continue?")
+        if not messagebox.askyesno(t("notice", self.lang), message):
+            return
+
+        def progress(text):
+            self.root.after(
+                0,
+                lambda value=text: self.gcli_state_label.configure(
+                    text=f"◌ {value}", text_color=INFO),
+            )
+
+        def done(result, error):
+            self._set_gcli_busy(False)
+            ok, message = result if result else (False, error or self._ui("安装失败", "Installation failed"))
+            self._append_log(message)
+            (messagebox.showinfo if ok else messagebox.showerror)(t("notice", self.lang), message)
+            self._detect_gcli2api()
+
+        self._run_gcli_worker(lambda: self.gcli2api.install(progress), done,
+                              self._ui("准备安装…", "Preparing installation…"))
+
+    def _start_gcli2api(self):
+        password = self._gcli_password()
+        if not password:
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "请先填写 gcli2api API 密码。启动时会同时作为本地面板密码。",
+                "Enter the gcli2api API password first. It will also be used as the local panel password."))
+            return
+
+        def done(result, error):
+            self._set_gcli_busy(False)
+            ok, message = result if result else (False, error or "Start failed")
+            self._append_log(message)
+            if not ok:
+                messagebox.showerror(t("error", self.lang), message)
+                return
+            self.root.after(1500, self._detect_gcli2api)
+
+        self._run_gcli_worker(lambda: self.gcli2api.start(password, password), done,
+                              self._ui("正在启动…", "Starting…"))
+
+    def _open_gcli2api_panel(self):
+        if not self.gcli2api.open_panel():
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "无法打开默认浏览器", "Could not open the default browser"))
+
+    def _add_gcli2api_to_claude(self):
+        password = self._gcli_password()
+        if not password:
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "请先填写 API 密码", "Enter the API password first"))
+            return
+        model = self.gcli_model_var.get().strip() or "gemini-2.5-pro"
+        _, fast_model = self.gcli2api.select_models(self._gcli_status.models or (model,))
+        existing = next((item for item in self.provider_manager.get_all_providers()
+                         if item.get("provider_kind") == "gcli2api"), None)
+        name = existing.get("name") if existing else "Gemini CLI (gcli2api)"
+        ok, message = self.provider_manager.add_or_update_provider(
+            name=name, old_name=name if existing else "", base_url=self.gcli2api.base_url,
+            model=model, small_fast_model=fast_model, api_key=password,
+            enabled=True, priority=10, auth_mode="bearer", provider_kind="gcli2api")
+        if ok:
+            self._refresh_provider_list()
+            self._append_log(message)
+        (messagebox.showinfo if ok else messagebox.showerror)(t("notice", self.lang), message)
+
+    def _add_gcli2api_to_gateway(self):
+        password = self._gcli_password()
+        if not password:
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "请先填写 API 密码", "Enter the API password first"))
+            return
+        models = list(self._gcli_status.models) or [self.gcli_model_var.get().strip() or "gemini-2.5-pro"]
+        existing = next((item for item in self.model_manager.get_all_providers()
+                         if item.get("provider_type") == "gcli2api"), None)
+        if existing:
+            ok, message = self.model_manager.update_provider(existing["id"], {
+                "name": existing.get("name") or "Gemini CLI (gcli2api)",
+                "base_url": f"{self.gcli2api.base_url}/v1",
+                "api_key": password, "auth_mode": "bearer", "status": "active",
+            })
+            if ok:
+                known = {item.get("model_name") for item in self.model_manager.get_models_by_provider(existing["id"])}
+                for model in models:
+                    if model not in known:
+                        self.model_manager.add_model(existing["id"], model)
+        else:
+            ok, message = self.model_manager.add_provider(
+                name="Gemini CLI (gcli2api)", provider_type="gcli2api",
+                base_url=f"{self.gcli2api.base_url}/v1", api_key=password,
+                auth_mode="bearer", models=[{"name": model} for model in models])
+        if ok:
+            self._refresh_models_tab()
+            self.gateway_panel._refresh_all()
+            self._append_log(message)
+        (messagebox.showinfo if ok else messagebox.showerror)(t("notice", self.lang), message)
+
+    def _show_gcli2api_examples(self):
+        GcliExamplesDialog(
+            self.root, self.lang,
+            self.gcli2api.generate_examples(self.gcli_model_var.get().strip() or "gemini-2.5-pro"),
+        ).grab_set()
 
     def _build_provider_section(self):
         section = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -361,7 +671,7 @@ class MainWindow:
                               anchor="w", font=ctk.CTkFont(size=10))
         status.pack(side="left", padx=PAD_SM, fill="x", expand=True)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=58, height=30,
-                      fg_color=BG_ELEVATED, hover_color=BORDER,
+                      fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
                       command=lambda n=name: self._show_edit_provider_dialog(n)).pack(side="right", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=58, height=30,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
@@ -421,6 +731,8 @@ class MainWindow:
         # 更新 Gateway 面板语言
         if hasattr(self, 'gateway_panel'):
             self.gateway_panel.set_lang(self.lang)
+        if hasattr(self, "gcli_state_label"):
+            self._render_gcli_status(self._gcli_status)
         self._refresh_project_source_label()
         self._refresh_provider_list()
         self._refresh_current_status()
@@ -764,7 +1076,8 @@ class MainWindow:
                       fg_color=INFO, hover_color=INFO_DARK, font=ctk.CTkFont(size=10),
                       command=lambda pid=provider.get("id", ""): self._test_provider_key(pid)).pack(side="left", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=50, height=28,
-                      fg_color=BG_ELEVATED, hover_color=BORDER, font=ctk.CTkFont(size=10),
+                      fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
+                      font=ctk.CTkFont(size=10),
                       command=lambda p=provider: self._show_edit_gateway_provider_dialog(p)).pack(side="right", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=50, height=28,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
@@ -1053,7 +1366,7 @@ class MainWindow:
                      text_color=TEXT_PRIMARY).pack(side="left")
 
         ctk.CTkButton(header, text=t("refresh_logs", self.lang), width=70, height=30,
-                      fg_color=BG_ELEVATED, hover_color=BORDER,
+                      fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
                       command=self._refresh_logs_tab).pack(side="right", padx=PAD_XS)
         ctk.CTkButton(header, text=t("clear_logs", self.lang), width=70, height=30,
                       fg_color="transparent", hover_color=BORDER, text_color=DANGER,
@@ -1123,6 +1436,82 @@ class MainWindow:
         self.root.mainloop()
 
 
+class GcliExamplesDialog:
+    """Copy-ready gcli2api examples without exposing the user's password."""
+
+    def __init__(self, parent, lang: str, examples: dict):
+        self.lang = lang
+        self.examples = examples
+        self.dialog = ctk.CTkToplevel(parent)
+        self.dialog.title("gcli2api " + ("调用示例" if lang == "zh" else "Examples"))
+        self.dialog.geometry("760x650")
+        self.dialog.minsize(640, 520)
+        self.dialog.configure(fg_color=BG_PRIMARY)
+        self.dialog.transient(parent)
+        self._build()
+
+    def _build(self):
+        body = ctk.CTkScrollableFrame(self.dialog, fg_color=BG_PRIMARY)
+        body.pack(fill="both", expand=True, padx=PAD_XL, pady=PAD_XL)
+        ctk.CTkLabel(
+            body,
+            text=self._ui(
+                "复制后把 YOUR_GCLI2API_PASSWORD 换成你自己的 API 密码。示例不会显示或复制输入框里的真实密码。",
+                "Replace YOUR_GCLI2API_PASSWORD with your API password after copying. Your real password is never shown here.",
+            ),
+            anchor="w", justify="left", wraplength=690,
+            text_color=TEXT_SECONDARY,
+        ).pack(fill="x", pady=(0, PAD_MD))
+
+        names = {
+            "anthropic": "Anthropic / Claude",
+            "openai": "OpenAI compatible",
+            "gemini": "Gemini native",
+        }
+        for key in ("anthropic", "openai", "gemini"):
+            value = str(self.examples.get(key, ""))
+            card = ctk.CTkFrame(
+                body, fg_color=BG_SURFACE, corner_radius=10,
+                border_width=1, border_color=BORDER)
+            card.pack(fill="x", pady=PAD_SM)
+            header = ctk.CTkFrame(card, fg_color="transparent")
+            header.pack(fill="x", padx=PAD_MD, pady=(PAD_MD, PAD_XS))
+            ctk.CTkLabel(
+                header, text=names[key], text_color=TEXT_PRIMARY,
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="left")
+            button = ctk.CTkButton(
+                header, text=self._ui("复制", "Copy"), width=72, height=28,
+                fg_color=GEMINI_ACCENT, hover_color=GEMINI_HOVER)
+            button.configure(command=lambda text=value, control=button: self._copy(text, control))
+            button.pack(side="right")
+            textbox = ctk.CTkTextbox(
+                card, height=110, fg_color=BG_INPUT,
+                font=ctk.CTkFont(family=FONT_MONO, size=10), wrap="word")
+            textbox.pack(fill="x", padx=PAD_MD, pady=(0, PAD_MD))
+            textbox.insert("1.0", value)
+            textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            body, text=self._ui("关闭", "Close"), fg_color=BG_ELEVATED,
+            hover_color=BORDER, text_color=TEXT_PRIMARY, command=self.dialog.destroy,
+        ).pack(fill="x", pady=(PAD_MD, 0))
+
+    def _ui(self, zh: str, en: str) -> str:
+        return zh if self.lang == "zh" else en
+
+    def _copy(self, value: str, button):
+        self.dialog.clipboard_clear()
+        self.dialog.clipboard_append(value)
+        original = self._ui("复制", "Copy")
+        button.configure(text=self._ui("已复制", "Copied"))
+        self.dialog.after(1400, lambda: button.configure(text=original))
+
+    def grab_set(self):
+        self.dialog.grab_set()
+        self.dialog.focus_force()
+
+
 class ProviderDialog:
     def __init__(self, parent, lang, provider, on_save):
         self.lang = lang
@@ -1142,6 +1531,7 @@ class ProviderDialog:
         body = ctk.CTkScrollableFrame(self.dialog, fg_color=BG_PRIMARY)
         body.pack(fill="both", expand=True, padx=PAD_XL, pady=PAD_XL)
         provider = self.provider or {}
+        self.provider_kind = provider.get("provider_kind", "custom")
         self.name_var = ctk.StringVar(value=provider.get("name", ""))
         self.url_var = ctk.StringVar(value=provider.get("base_url", ""))
         self.model_var = ctk.StringVar(value=provider.get("model", ""))
@@ -1170,7 +1560,8 @@ class ProviderDialog:
         buttons = ctk.CTkFrame(body, fg_color="transparent")
         buttons.pack(fill="x", pady=PAD_MD)
         ctk.CTkButton(buttons, text=t("cancel", self.lang), fg_color=BG_ELEVATED,
-                      hover_color=BORDER, command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
+                      hover_color=BORDER, text_color=TEXT_PRIMARY,
+                      command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
         ctk.CTkButton(buttons, text=t("save", self.lang), fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self._save).pack(side="right", expand=True, fill="x", padx=(PAD_SM, 0))
 
@@ -1193,6 +1584,7 @@ class ProviderDialog:
             "priority": 99,
             "is_fallback": False,
             "auth_mode": "x-api-key" if self.auth_var.get() == "x-api-key" else "bearer",
+            "provider_kind": self.provider_kind,
         }
         if self.on_save(data, self.old_name):
             self.dialog.destroy()
@@ -1275,7 +1667,8 @@ class ProviderGatewayDialog:
         buttons = ctk.CTkFrame(body, fg_color="transparent")
         buttons.pack(fill="x", pady=PAD_MD)
         ctk.CTkButton(buttons, text=t("cancel", self.lang), fg_color=BG_ELEVATED,
-                      hover_color=BORDER, command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
+                      hover_color=BORDER, text_color=TEXT_PRIMARY,
+                      command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
         ctk.CTkButton(buttons, text=t("save", self.lang), fg_color=ACCENT,
                       hover_color=ACCENT_HOVER, command=self._save).pack(side="right", expand=True, fill="x", padx=(PAD_SM, 0))
 
