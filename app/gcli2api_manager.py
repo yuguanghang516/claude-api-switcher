@@ -49,14 +49,19 @@ class Gcli2ApiManager:
     """
 
     def __init__(self, data_dir: Path | str, base_url: str = DEFAULT_BASE_URL,
-                 logger=None, request_timeout: int = 6) -> None:
+                 logger=None, request_timeout: int = 6,
+                 auto_discover: bool = True) -> None:
         self.data_dir = Path(data_dir)
         self.base_url = self.normalize_base_url(base_url)
-        self.install_dir = self.data_dir / "integrations" / "gcli2api"
+        self.managed_install_dir = self.data_dir / "integrations" / "gcli2api"
+        self.install_dir = self.managed_install_dir
         self.logger = logger
         self.request_timeout = request_timeout
+        self.auto_discover = auto_discover
         self._managed_process: Optional[subprocess.Popen] = None
         self._managed_executable = ""
+        if auto_discover:
+            self.refresh_install_dir()
 
     @staticmethod
     def normalize_base_url(base_url: str) -> str:
@@ -85,7 +90,7 @@ class Gcli2ApiManager:
 
     def _safe_install_dir(self) -> Path:
         integration_root = (self.data_dir / "integrations").resolve()
-        target = self.install_dir.resolve()
+        target = self.managed_install_dir.resolve()
         try:
             target.relative_to(integration_root)
         except ValueError as exc:
@@ -93,6 +98,57 @@ class Gcli2ApiManager:
         if target == integration_root:
             raise ValueError("gcli2api 安装目录无效")
         return target
+
+    @staticmethod
+    def _is_complete_install(path: Path) -> bool:
+        """Return whether a directory is a runnable Windows gcli2api checkout."""
+        return (
+            path.is_dir()
+            and (path / "web.py").is_file()
+            and (path / "pyproject.toml").is_file()
+            and (path / ".venv" / "Scripts" / "python.exe").is_file()
+        )
+
+    def candidate_install_dirs(self) -> Tuple[Path, ...]:
+        """List explicit, bounded locations used by supported Windows installers."""
+        profile = Path(os.environ.get("USERPROFILE") or Path.home())
+        local_app_data = Path(os.environ.get("LOCALAPPDATA") or profile / "AppData" / "Local")
+        roaming_app_data = Path(os.environ.get("APPDATA") or profile / "AppData" / "Roaming")
+        configured = os.environ.get("GCLI2API_HOME", "").strip()
+        values = [
+            self.managed_install_dir,
+            Path(configured) if configured else None,
+            profile / "gcli2api",
+            profile / "Desktop" / "gcli2api",
+            profile / "Documents" / "gcli2api",
+            local_app_data / "gcli2api",
+            roaming_app_data / "gcli2api",
+        ]
+        result: List[Path] = []
+        seen = set()
+        for value in values:
+            if value is None:
+                continue
+            try:
+                resolved = value.expanduser().resolve()
+            except OSError:
+                continue
+            normalized = os.path.normcase(str(resolved))
+            if normalized not in seen:
+                seen.add(normalized)
+                result.append(resolved)
+        return tuple(result)
+
+    def refresh_install_dir(self) -> Path:
+        """Use an existing terminal installation before the app-managed location."""
+        if not self.auto_discover:
+            return self.install_dir
+        for candidate in self.candidate_install_dirs():
+            if self._is_complete_install(candidate):
+                self.install_dir = candidate
+                return candidate
+        self.install_dir = self.managed_install_dir
+        return self.install_dir
 
     @staticmethod
     def _resolve_executable(name: str) -> str:
@@ -155,8 +211,12 @@ class Gcli2ApiManager:
         """Install dependencies and clone/sync the upstream project after UI consent."""
 
         progress = progress_callback or (lambda _message: None)
+        existing = self.refresh_install_dir()
+        if self._is_complete_install(existing):
+            return True, f"已检测到现有 gcli2api，无需重复安装：{existing}"
         try:
             target = self._safe_install_dir()
+            self.install_dir = target
             target.parent.mkdir(parents=True, exist_ok=True)
         except (OSError, ValueError) as exc:
             return False, self._redact(str(exc))
@@ -251,6 +311,8 @@ class Gcli2ApiManager:
     def detect(self, api_password: str = "") -> Gcli2ApiStatus:
         """Probe the service without following credential-bearing redirects."""
 
+        if self.is_local:
+            self.refresh_install_dir()
         headers = {"Accept": "application/json"}
         if api_password:
             headers["Authorization"] = f"Bearer {api_password}"
@@ -308,7 +370,10 @@ class Gcli2ApiManager:
     def start(self, api_password: str = "", panel_password: str = "") -> Tuple[bool, str]:
         if not self.is_local:
             return False, "远程 gcli2api 只能连接，不能由本软件启动"
+        self.refresh_install_dir()
         target = self._safe_install_dir()
+        if self.install_dir != self.managed_install_dir:
+            target = self.install_dir
         python_exe = target / ".venv" / "Scripts" / "python.exe"
         web_file = target / "web.py"
         if not python_exe.is_file() or not web_file.is_file():

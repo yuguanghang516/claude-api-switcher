@@ -5,8 +5,8 @@ metadata, README, exported config version) imports from here so the app can
 never show two different versions.
 """
 APP_NAME = "Claude API Switcher"
-APP_VERSION = "4.1.0"
-APP_VERSION_NAME = "V4.1"
+APP_VERSION = "4.1.1"
+APP_VERSION_NAME = "V4.1.1"
 __version__ = APP_VERSION
 
 # Metadata attached to exported config files so older/newer builds can tell

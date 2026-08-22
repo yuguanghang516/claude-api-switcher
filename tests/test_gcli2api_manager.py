@@ -25,7 +25,7 @@ class FakeResponse:
 
 @pytest.fixture
 def manager(tmp_path):
-    instance = Gcli2ApiManager(tmp_path)
+    instance = Gcli2ApiManager(tmp_path, auto_discover=False)
     instance._version = lambda: ""
     return instance
 
@@ -65,6 +65,71 @@ def test_remote_http_raises(tmp_path):
 def test_managed_path_stays_under_data_dir(manager):
     target = manager._safe_install_dir()
     target.relative_to((manager.data_dir / "integrations").resolve())
+
+
+def test_discovers_existing_terminal_install(monkeypatch, tmp_path):
+    existing = tmp_path / "terminal-install" / "gcli2api"
+    (existing / ".venv" / "Scripts").mkdir(parents=True)
+    (existing / "web.py").touch()
+    (existing / "pyproject.toml").write_text("[project]\nname='gcli2api'", encoding="utf-8")
+    (existing / ".venv" / "Scripts" / "python.exe").touch()
+    monkeypatch.setenv("GCLI2API_HOME", str(existing))
+
+    discovered = Gcli2ApiManager(tmp_path / "app-data")
+
+    assert discovered.install_dir == existing.resolve()
+    assert discovered.install_dir != discovered.managed_install_dir
+
+
+def test_install_reuses_existing_terminal_install(monkeypatch, tmp_path):
+    existing = tmp_path / "gcli2api"
+    (existing / ".venv" / "Scripts").mkdir(parents=True)
+    (existing / "web.py").touch()
+    (existing / "pyproject.toml").touch()
+    (existing / ".venv" / "Scripts" / "python.exe").touch()
+    monkeypatch.setenv("GCLI2API_HOME", str(existing))
+    discovered = Gcli2ApiManager(tmp_path / "app-data")
+    monkeypatch.setattr(discovered, "detect_dependencies", lambda: pytest.fail("must not reinstall"))
+
+    ok, message = discovered.install()
+
+    assert ok
+    assert "无需重复安装" in message
+    assert str(existing.resolve()) in message
+
+
+def test_start_uses_discovered_terminal_install(monkeypatch, tmp_path):
+    existing = tmp_path / "gcli2api"
+    python = existing / ".venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.touch()
+    (existing / "web.py").touch()
+    (existing / "pyproject.toml").touch()
+    monkeypatch.setenv("GCLI2API_HOME", str(existing))
+    discovered = Gcli2ApiManager(tmp_path / "app-data")
+    seen = {}
+
+    class FakeProcess:
+        pid = 456
+
+        def __init__(self, args):
+            self.args = args
+
+        def poll(self):
+            return None
+
+    def fake_popen(args, **kwargs):
+        seen["args"] = args
+        seen.update(kwargs)
+        return FakeProcess(args)
+
+    monkeypatch.setattr("app.gcli2api_manager.subprocess.Popen", fake_popen)
+
+    ok, _ = discovered.start("api-password", "panel-password")
+
+    assert ok
+    assert Path(seen["args"][0]) == python.resolve()
+    assert Path(seen["cwd"]) == existing.resolve()
 
 
 def test_select_models_prefers_pro_and_flash():

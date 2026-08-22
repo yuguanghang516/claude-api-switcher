@@ -1,8 +1,8 @@
-# Claude API Switcher V4.1
+# Claude API Switcher V4.1.1
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.1.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.1.1.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -32,7 +32,7 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.1.exe`。
+1. 从 GitHub Releases 下载 `Claude API Switcher V4.1.1.exe`。
 2. 双击运行。
 3. 在“供应商”页添加或编辑 Provider。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -54,6 +54,8 @@
 3. 点击“打开面板”，在 gcli2api 中完成 Google OAuth；本软件不会下载、上传或打包 OAuth 凭据。
 4. 点击“检测服务”获取实际模型列表，再选择“添加到 Claude”或“添加到网关”。
 5. “调用示例”提供 Anthropic、OpenAI 和 Gemini 三种可复制格式，示例只使用密码占位符。
+
+如果已经通过终端安装，软件会自动识别 `%USERPROFILE%\gcli2api`、桌面、文档、LocalAppData、RoamingAppData 或 `GCLI2API_HOME` 指定的完整安装目录。检测到后直接显示“已安装，未运行”，启动时使用现有 `.venv`，不会要求重复安装。
 
 常用地址：
 
@@ -128,7 +130,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-当前 V4.1 基线：324 项自动化测试全部通过；Windows EXE 已实际启动，并完成浅色、深色、调用示例弹窗和干净退出验证。
+当前 V4.1.1 基线：327 项自动化测试全部通过；Windows EXE 已实际启动，并完成终端安装识别、浅色、深色、调用示例弹窗和干净退出验证。
 
 ## 仓库边界
 

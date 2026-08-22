@@ -370,6 +370,7 @@ class MainWindow:
         for column in range(4):
             actions.grid_columnconfigure(column, weight=1, uniform="gcli-actions")
         self.gcli_action_buttons = []
+        self.gcli_buttons = {}
         button_specs = [
             ("gcli_detect", self._detect_gcli2api, BG_ELEVATED, BORDER),
             ("gcli_install", self._install_gcli2api, GEMINI_ACCENT, GEMINI_HOVER),
@@ -383,11 +384,13 @@ class MainWindow:
             button = self._bind_text(ctk.CTkButton(
                 actions, text="", height=34, fg_color=color, hover_color=hover,
                 text_color=TEXT_PRIMARY if color == BG_ELEVATED else ACCENT_TEXT,
+                text_color_disabled=TEXT_MUTED,
                 command=command), key)
             button.grid(
                 row=index // 4, column=index % 4, sticky="ew",
                 padx=(0 if index % 4 == 0 else PAD_XS, 0), pady=PAD_XS)
             self.gcli_action_buttons.append(button)
+            self.gcli_buttons[key] = button
         github_button = ctk.CTkButton(
             actions, text="GitHub", width=64, height=34, fg_color="transparent",
             border_width=1, border_color=BORDER, hover_color=BG_ELEVATED,
@@ -398,8 +401,9 @@ class MainWindow:
 
     def _set_gcli_busy(self, busy: bool, message: str = ""):
         self._gcli_busy = busy
-        for button in getattr(self, "gcli_action_buttons", []):
-            button.configure(state="disabled" if busy else "normal")
+        for key, button in getattr(self, "gcli_buttons", {}).items():
+            disabled = busy or (key == "gcli_install" and self._gcli_status.installed)
+            button.configure(state="disabled" if disabled else "normal")
         if message:
             self.gcli_state_label.configure(text=f"◌ {message}", text_color=INFO)
 
@@ -491,6 +495,13 @@ class MainWindow:
             current = self.gcli_model_var.get()
             if current not in values:
                 self.gcli_model_var.set(primary)
+        install_button = getattr(self, "gcli_buttons", {}).get("gcli_install")
+        if install_button:
+            install_button.configure(
+                text=self._ui("已安装", "Installed") if status.installed
+                else t("gcli_install", self.lang),
+                state="disabled" if status.installed else "normal",
+            )
 
     def _install_gcli2api(self):
         message = self._ui(
