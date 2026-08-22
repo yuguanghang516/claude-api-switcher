@@ -9,6 +9,7 @@ from app.gcli2api_manager import (
     PLACEHOLDER_PASSWORD,
     REPO_URL,
     Gcli2ApiManager,
+    Gcli2ApiStatus,
 )
 
 
@@ -356,6 +357,90 @@ def test_start_uses_argument_array_and_local_host(monkeypatch, manager):
 def test_start_rejects_remote_service(tmp_path):
     manager = Gcli2ApiManager(tmp_path, "https://proxy.example.com")
     assert manager.start()[0] is False
+
+
+def _startup_status(manager, state, *, running=False, ready=False, error_code="", models=()):
+    return Gcli2ApiStatus(
+        state=state, installed=True, running=running, ready=ready,
+        base_url=manager.base_url, install_dir=manager.install_dir,
+        error_code=error_code, models=tuple(models), message=state,
+    )
+
+
+def test_start_and_wait_does_not_duplicate_existing_ready_service(monkeypatch, manager):
+    ready = _startup_status(manager, "ready", running=True, ready=True, models=("gemini-pro",))
+    monkeypatch.setattr(manager, "detect", lambda _password: ready)
+    monkeypatch.setattr(manager, "start", lambda *_args: pytest.fail("must not start twice"))
+
+    ok, message, status = manager.start_and_wait("secret", "secret")
+
+    assert ok and status is ready
+    assert "已经启动" in message
+
+
+def test_start_and_wait_reports_ready_only_after_http_probe(monkeypatch, manager):
+    stopped = _startup_status(manager, "stopped")
+    ready = _startup_status(manager, "ready", running=True, ready=True, models=("gemini-pro",))
+    states = iter((stopped, stopped, ready))
+    monkeypatch.setattr(manager, "detect", lambda _password: next(states))
+    monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
+
+    ok, message, status = manager.start_and_wait("secret", "secret", timeout=1, poll_interval=0)
+
+    assert ok and status is ready
+    assert "可以调用" in message
+
+
+def test_start_and_wait_guides_oauth_after_service_starts(monkeypatch, manager):
+    stopped = _startup_status(manager, "stopped")
+    oauth = _startup_status(manager, "oauth_required", running=True, error_code="no_models")
+    states = iter((stopped, oauth))
+    monkeypatch.setattr(manager, "detect", lambda _password: next(states))
+    monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
+
+    ok, message, status = manager.start_and_wait("secret", "secret", timeout=1, poll_interval=0)
+
+    assert ok and status is oauth
+    assert "Google OAuth" in message
+
+
+def test_start_and_wait_rejects_wrong_password_without_spawning(monkeypatch, manager):
+    auth = _startup_status(manager, "auth_required", running=True, error_code="auth_failed")
+    monkeypatch.setattr(manager, "detect", lambda _password: auth)
+    monkeypatch.setattr(manager, "start", lambda *_args: pytest.fail("must not start on occupied port"))
+
+    ok, message, status = manager.start_and_wait("wrong", "wrong")
+
+    assert not ok and status is auth
+    assert "API_PASSWORD" in message
+
+
+def test_start_and_wait_reports_process_exit(monkeypatch, manager):
+    stopped = _startup_status(manager, "stopped")
+    monkeypatch.setattr(manager, "detect", lambda _password: stopped)
+
+    def fake_start(*_args):
+        manager._managed_process = SimpleNamespace(poll=lambda: 7)
+        return True, "process created"
+
+    monkeypatch.setattr(manager, "start", fake_start)
+    ok, message, status = manager.start_and_wait("secret", "secret", timeout=1, poll_interval=0)
+
+    assert not ok and status is stopped
+    assert "退出码 7" in message
+
+
+def test_start_and_wait_reports_timeout(monkeypatch, manager):
+    stopped = _startup_status(manager, "stopped")
+    monkeypatch.setattr(manager, "detect", lambda _password: stopped)
+    monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
+    times = iter((0.0, 1.0))
+    monkeypatch.setattr("app.gcli2api_manager.time.monotonic", lambda: next(times))
+
+    ok, message, status = manager.start_and_wait("secret", "secret", timeout=0.5, poll_interval=0)
+
+    assert not ok and status is stopped
+    assert "0.5 秒内服务未响应" in message
 
 
 def test_stop_refuses_unknown_process(manager):

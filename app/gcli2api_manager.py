@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
@@ -399,6 +400,67 @@ class Gcli2ApiManager:
         self._managed_process = process
         self._managed_executable = str(python_exe.resolve())
         return True, f"gcli2api 正在启动（PID {process.pid}）"
+
+    def start_and_wait(self, api_password: str = "", panel_password: str = "",
+                       timeout: float = 15.0, poll_interval: float = 0.4
+                       ) -> Tuple[bool, str, Gcli2ApiStatus]:
+        """Start a local service and wait until its HTTP endpoint is observable.
+
+        Process creation alone is not treated as success. Existing services are
+        detected before spawning so an occupied port cannot produce a duplicate
+        instance or a misleading success message.
+        """
+
+        status = self.detect(api_password)
+        if status.running:
+            if status.ready:
+                return True, "gcli2api 服务已经启动并可以调用", status
+            if status.state == "oauth_required":
+                return True, "gcli2api 服务已经启动，下一步请完成 Google OAuth", status
+            if status.state == "auth_required":
+                return False, (
+                    "检测到 gcli2api 已在运行，但当前 API 密码不匹配；"
+                    "请填写该服务启动时设置的 API_PASSWORD，然后点击“检测服务”"
+                ), status
+            return False, f"gcli2api 已在运行，但尚不可调用：{status.message}", status
+
+        ok, start_message = self.start(api_password, panel_password)
+        if not ok:
+            return False, start_message, status
+
+        deadline = time.monotonic() + max(0.0, timeout)
+        last_status = status
+        while True:
+            last_status = self.detect(api_password)
+            if last_status.running:
+                if last_status.ready:
+                    return True, "gcli2api 服务已启动并可以调用", last_status
+                if last_status.state == "oauth_required":
+                    return True, "gcli2api 服务已启动，下一步请完成 Google OAuth", last_status
+                if last_status.state == "auth_required":
+                    return False, (
+                        "gcli2api 服务已启动，但 API 密码校验失败；"
+                        "请确认输入的密码与 API_PASSWORD 一致"
+                    ), last_status
+                return False, f"gcli2api 服务已启动，但尚不可调用：{last_status.message}", last_status
+
+            process = self._managed_process
+            if process is not None:
+                return_code = process.poll()
+                if return_code is not None:
+                    self._managed_process = None
+                    self._managed_executable = ""
+                    return False, (
+                        f"gcli2api 进程启动后立即退出（退出码 {return_code}）；"
+                        "请检查端口 7861 是否被占用，或在终端运行 web.py 查看错误"
+                    ), last_status
+
+            if time.monotonic() >= deadline:
+                return False, (
+                    f"gcli2api 进程已创建，但 {timeout:g} 秒内服务未响应；"
+                    "请检查端口 7861、防火墙，并在终端运行 web.py 查看错误"
+                ), last_status
+            time.sleep(max(0.0, poll_interval))
 
     def stop_managed(self) -> Tuple[bool, str]:
         process = self._managed_process

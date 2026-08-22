@@ -1,8 +1,8 @@
-# Claude API Switcher V4.1.1
+# Claude API Switcher V4.2.0
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.1.1.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.2.0.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -14,10 +14,25 @@
 - 支持跟随 Windows、浅色、深色三种主题。
 - 提供 OpenAI 兼容的本地 AI Gateway、模型管理、Token 统计和请求日志。
 - 集成 gcli2api：可视化安装、启动、OAuth 状态检测、动态模型发现，并可一键加入 Claude Code 或本地网关。
+- 提供真实口径的额度监控：汇总 Claude Code 本机 Token、按供应商统计网关调用，并严格区分官方余额与不支持自动查询。
+- 提供按本地时间统计的近 7 天 Token 热力图，按星期和小时显示活跃度。
+- 使用原创蓝紫双向 API 路径图标，并同时应用到窗口、任务栏和 EXE。
+
+## 界面分类
+
+顶部只保留 5 个按任务划分的主入口：
+
+| 入口 | 用途 |
+|---|---|
+| API 切换 | 管理 Claude 直连供应商、测试并切换 API、选择项目并启动 Claude |
+| Gemini 反代 | 安装、启动、登录和接入 gcli2api |
+| 本地网关 | 启停网关；通过“概览与模型 / 网关供应商 / 请求日志”管理网关功能 |
+| 用量监控 | 查看本机 Claude Token、7 天热力图、网关分 API 用量和官方余额 |
+| 环境设置 | 检测或安装 Claude Code，并切换跟随系统、浅色、深色主题 |
 
 ## 一键配置 Claude Code
 
-打开“设置”页面后，软件会显示 Claude Code 的版本、路径、安装方式和健康状态。
+打开“环境设置”页面后，软件会显示 Claude Code 的版本、路径、安装方式和健康状态。
 
 如果未安装，点击“一键安装 / 更新”：
 
@@ -32,9 +47,9 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.1.1.exe`。
+1. 从 GitHub Releases 下载 `Claude API Switcher V4.2.0.exe`。
 2. 双击运行。
-3. 在“供应商”页添加或编辑 Provider。
+3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
 5. 点击“测试并使用”。
 6. 选择项目目录，然后点击“快速启动 Claude”。
@@ -47,15 +62,17 @@
 
 ## Gemini 反代（gcli2api）
 
-“供应商”页顶部提供独立的 gcli2api 控制卡：
+打开独立的“Gemini 反代”页：
 
 1. 点击“一键安装”。缺少 Git 或 uv 时，软件会通过 WinGet 安装固定的软件包，然后从官方仓库克隆并运行 `uv sync`。
-2. 填写你自己的 API 密码并启动服务。默认只监听 `127.0.0.1:7861`。
+2. 本地 API 密码由你自己设置，不是 Google API Key。可以直接输入，也可以点击“生成并复制”；启动时软件把同一个密码设置为 API 和面板密码。默认只监听 `127.0.0.1:7861`。
 3. 点击“打开面板”，在 gcli2api 中完成 Google OAuth；本软件不会下载、上传或打包 OAuth 凭据。
-4. 点击“检测服务”获取实际模型列表，再选择“添加到 Claude”或“添加到网关”。
+4. 点击“检测服务”获取实际模型列表，再选择“添加到 Claude”或“添加到网关”。“添加到 Claude”后，到下方 API 供应商点击“测试并使用”，才会切换当前 Provider。
 5. “调用示例”提供 Anthropic、OpenAI 和 Gemini 三种可复制格式，示例只使用密码占位符。
 
 如果已经通过终端安装，软件会自动识别 `%USERPROFILE%\gcli2api`、桌面、文档、LocalAppData、RoamingAppData 或 `GCLI2API_HOME` 指定的完整安装目录。检测到后直接显示“已安装，未运行”，启动时使用现有 `.venv`，不会要求重复安装。
+
+点击“启动服务”后，软件会等待 HTTP 服务真正响应再显示成功。若尚未完成 Google OAuth，成功弹窗和卡片常驻指引会逐步提示“打开面板 → 使用同一密码登录 → 完成 OAuth → 返回检测服务”；进程退出、密码不一致、端口无响应和超时会显示对应处理方法。
 
 常用地址：
 
@@ -67,6 +84,16 @@
 
 gcli2api 是[独立第三方项目](https://github.com/su-kaka/gcli2api)，使用 CNC-1.0 非商业许可证，不属于本软件，也不会被打包进 EXE。本软件不会执行其 README 中的远程 PowerShell 安装脚本，不修改 PowerShell ExecutionPolicy；安装失败时会显示 WinGet、Git、uv、网络、权限或超时等具体原因。
 
+## 用量与余额
+
+“用量监控”页把不同来源的数据分开显示：
+
+- **Claude Code 本机用量**：只读取 `%USERPROFILE%\.claude\projects` 会话文件中的时间、模型、消息 ID 和 `usage` 数字，不读取或保存聊天内容；显示今日、本月、各模型 Token，以及最近 7 天按星期和小时分布的热力图。
+- **各 API 本地网关用量**：按供应商汇总经过本软件网关的调用次数、成功/失败和输入/输出 Token。旧记录没有供应商字段时显示“历史记录未标注”，不会猜测。
+- **供应商账户余额**：只有官方公开、稳定的余额接口才显示“官方余额”。当前 DeepSeek 使用官方余额接口；LongCat、Anthropic、OpenAI、Google/gcli2api 显示不支持自动查询的原因和官方平台入口。
+
+LongCat 公共文档目前没有账户余额 API，因此软件会显示本机统计到的 LongCat Token，但真实剩余必须点击“打开平台”到 LongCat Usage 页面查看。软件不会把调用成功或密钥有效伪装成“余额 100%”。
+
 ### 从源码运行
 
 ```powershell
@@ -76,9 +103,9 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
-## AI Gateway
+## 本地网关
 
-“AI 网关”页可以启动默认监听 `http://127.0.0.1:8787` 的本地服务，提供：
+“本地网关”页可以启动默认监听 `http://127.0.0.1:8787` 的本地服务，提供：
 
 | 接口 | 方法 | 说明 |
 |---|---|---|
@@ -130,7 +157,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-当前 V4.1.1 基线：327 项自动化测试全部通过；Windows EXE 已实际启动，并完成终端安装识别、浅色、深色、调用示例弹窗和干净退出验证。
+当前 V4.2.0 基线：356 项自动化测试全部通过；源码界面已完成 gcli2api 终端安装识别、密码来源说明、服务启动状态、Claude 本机用量、7 天热力图、LongCat 余额口径、导航分类、新图标、浅色、深色和干净退出验证。
 
 ## 仓库边界
 

@@ -414,11 +414,16 @@ class GatewayServer:
             return jsonify({"error": {"message": f"代理请求失败: {str(e)[:100]}", "type": "proxy_error"}}), 502
 
     def _log_request(self, model: str, input_tokens: int, output_tokens: int,
-                     total_tokens: int, response_time_ms: int, status: str, error: str = ""):
+                     total_tokens: int, response_time_ms: int, status: str, error: str = "",
+                     provider: str = ""):
         """记录请求日志"""
         if self.db:
+            if not provider and model:
+                model_config = self.db.get_model_by_name(model)
+                provider = (model_config or {}).get("provider_name", "")
             self.db.log_request({
                 "model": model,
+                "provider": provider,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,

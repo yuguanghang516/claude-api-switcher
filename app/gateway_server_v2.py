@@ -1,6 +1,6 @@
 """
-V2 智能 AI 网关服务器
-集成所有 V2 功能：
+增强版 AI 网关服务器
+集成网关增强功能：
 - API 余额检测
 - 多 Key 自动轮询
 - 自动故障转移
@@ -30,7 +30,7 @@ from .gateway_server import SUPPORTED_PROVIDERS
 
 
 class GatewayServerV2:
-    """V2 智能 AI 网关服务器"""
+    """增强版 AI 网关服务器。"""
 
     def __init__(self, db_manager=None, logger=None, v2_config: V2ConfigManager = None,
                  host: str = "127.0.0.1", port: int = 8787):
@@ -250,7 +250,7 @@ class GatewayServerV2:
     def _on_balance_refreshed(self, balances: Dict[str, BalanceInfo]):
         """余额刷新回调"""
         for name, info in balances.items():
-            if info.status == "ok" and info.balance < self.v2_config.get_notifications().get("low_balance_threshold", 10):
+            if info.status in {"official", "ok"} and info.balance < self.v2_config.get_notifications().get("low_balance_threshold", 10):
                 self.notifier.notify_low_balance(
                     provider=name,
                     balance=info.balance,
@@ -413,7 +413,7 @@ class GatewayServerV2:
 
             # 记录日志
             self._log_request(model_name, prompt_tokens, completion_tokens, total_tokens,
-                             elapsed, "success", "")
+                             elapsed, "success", "", provider=used_target.provider_name)
 
             # 构建响应
             if provider_type == "anthropic":
@@ -552,11 +552,16 @@ class GatewayServerV2:
         return targets
 
     def _log_request(self, model: str, input_tokens: int, output_tokens: int,
-                     total_tokens: int, response_time_ms: int, status: str, error: str = ""):
+                     total_tokens: int, response_time_ms: int, status: str, error: str = "",
+                     provider: str = ""):
         """记录请求日志"""
         if self.db:
+            if not provider and model:
+                model_config = self.db.get_model_by_name(model)
+                provider = (model_config or {}).get("provider_name", "")
             self.db.log_request({
                 "model": model,
+                "provider": provider,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "total_tokens": total_tokens,

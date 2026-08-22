@@ -1,9 +1,12 @@
 """Claude API Switcher V4：Claude Code 环境、API 切换与本地网关。"""
 import os
 import queue
+import secrets
+import sys
 import threading
 import webbrowser
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -54,6 +57,48 @@ FONT_MONO = "Consolas"
 PAD_XS, PAD_SM, PAD_MD, PAD_LG, PAD_XL = 4, 8, 12, 16, 24
 
 
+def _resource_path(relative_path: str) -> Path:
+    """Resolve bundled PyInstaller assets and source-tree assets alike."""
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    return bundle_root / relative_path
+
+
+def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh") -> str:
+    """Return the exact next action for the current gcli2api state."""
+    if lang == "zh":
+        if status.state == "unknown":
+            return "操作指引｜正在自动检测安装与服务状态，请稍候。"
+        if not status.installed and not status.running:
+            return "操作步骤 1/4｜点击“一键安装”；安装完成后，自己填写密码或点“生成并复制”（不是 Google API Key）。"
+        if status.state == "stopped":
+            if has_password:
+                return "操作步骤 2/4｜密码已填写，点击“启动服务”；软件确认服务响应后会弹出结果。"
+            return "操作步骤 2/4｜这个密码由你自己设置：直接填写或点“生成并复制”，然后点击“启动服务”。"
+        if status.state == "auth_required":
+            return "需要处理｜当前密码与运行中服务的 API_PASSWORD 不一致。改成正确密码，再点击“检测服务”。"
+        if status.state == "oauth_required":
+            return "操作步骤 3/4｜点击“打开面板” → 用同一密码登录 → 完成 Google OAuth → 回软件点击“检测服务”。"
+        if status.ready:
+            return "操作步骤 4/4｜选择模型 →“添加到 Claude”→ 在下方 API 供应商点“测试并使用”→ 选择项目并“快速启动 Claude”。"
+        return f"需要处理｜{status.message or '服务状态异常'}；处理后点击“检测服务”重新确认。"
+
+    if status.state == "unknown":
+        return "Guide | Detecting the installation and service. Please wait."
+    if not status.installed and not status.running:
+        return "Step 1/4 | Click Install, then choose a password or click Generate & Copy. This is not a Google API key."
+    if status.state == "stopped":
+        if has_password:
+            return "Step 2/4 | Password entered. Click Start; the app will wait for an HTTP response."
+        return "Step 2/4 | Choose your own password or click Generate & Copy, then click Start."
+    if status.state == "auth_required":
+        return "Action needed | The password does not match API_PASSWORD of the running service. Correct it, then click Check."
+    if status.state == "oauth_required":
+        return "Step 3/4 | Open Panel → sign in with the same password → complete Google OAuth → return and click Check."
+    if status.ready:
+        return "Step 4/4 | Select a model → Add to Claude → click Test & Use below → choose a project and Quick Launch Claude."
+    return f"Action needed | {status.message or 'Service error'}. Fix it, then click Check again."
+
+
 class MainWindow:
     def __init__(self, data_dir: str, logs_dir: str):
         self.logger = AppLogger(logs_dir)
@@ -91,13 +136,18 @@ class MainWindow:
         self.gateway = GatewayServer(db_manager=self.db, logger=self.logger)
         self.model_manager.init_defaults()
 
-        # === V2 智能网关模块 ===
+        # === 增强网关模块（保留 V2 类名以兼容已有配置） ===
         self.v2_config = V2ConfigManager(data_dir)
         self.gateway_v2 = GatewayServerV2(
             db_manager=self.db, logger=self.logger, v2_config=self.v2_config)
 
         self.root = ctk.CTk()
         self.root.title(app_title())
+        try:
+            self.root.iconbitmap(str(_resource_path("assets/app_icon.ico")))
+        except Exception:
+            # An unavailable icon must never prevent the manager from opening.
+            pass
         self.root.geometry("1080x820")
         self.root.minsize(900, 680)
         self.root.configure(fg_color=BG_PRIMARY)
@@ -148,65 +198,137 @@ class MainWindow:
         return tip
 
     def _build_ui(self):
-        # === Tab 切换栏 ===
+        # === 一级导航：按用户任务分类，网关细项放入二级导航 ===
         self.tab_frame = ctk.CTkFrame(self.root, fg_color=BG_SURFACE, corner_radius=0,
                                        border_width=1, border_color=BORDER)
         self.tab_frame.pack(fill="x", padx=0, pady=0)
 
         self.tab_buttons = {}
-        tabs = [("providers_tab", "providers"), ("gateway_tab", "gateway"),
-                ("v2_dashboard_tab", "v2_dashboard"),
-                ("models_tab", "models"), ("logs_tab", "logs"),
-                ("settings_tab", "settings")]
-        for i, (key, name) in enumerate(tabs):
+        self.main_tabs = [
+            ("providers_tab", "switcher"),
+            ("gcli_tab", "gcli"),
+            ("gateway_tab", "gateway"),
+            ("v2_dashboard_tab", "usage"),
+            ("settings_tab", "settings"),
+        ]
+        for i, (key, name) in enumerate(self.main_tabs):
+            self.tab_frame.grid_columnconfigure(i, weight=1, uniform="main-nav")
             btn = ctk.CTkButton(
-                self.tab_frame, text=t(key, self.lang), width=110, height=36,
+                self.tab_frame, text=t(key, self.lang), height=38,
                 fg_color="transparent" if i != 0 else ACCENT,
                 hover_color=ACCENT_HOVER if i == 0 else BG_ELEVATED,
                 text_color=ACCENT_TEXT if i == 0 else TEXT_PRIMARY,
-                corner_radius=8, font=ctk.CTkFont(size=12, weight="bold"),
-                command=lambda idx=i: self._switch_tab(idx))
-            btn.pack(side="left", padx=PAD_XS, pady=PAD_SM)
+                corner_radius=8,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                command=lambda tab_name=name: self._switch_tab(tab_name))
+            btn.grid(row=0, column=i, sticky="ew", padx=PAD_XS, pady=PAD_SM)
             self.tab_buttons[name] = btn
 
         # === 内容区容器 ===
         self.content_frame = ctk.CTkFrame(self.root, fg_color=BG_PRIMARY)
         self.content_frame.pack(fill="both", expand=True)
 
-        # Tab 0: 原有的 Claude Switcher 主界面
+        # API 切换：当前状态、Claude 启动和 Claude 供应商
         self.switcher_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
         self.switcher_frame.pack(fill="both", expand=True)
         self.main_frame = ctk.CTkScrollableFrame(self.switcher_frame, fg_color=BG_PRIMARY)
         self.main_frame.pack(fill="both", expand=True, padx=PAD_LG, pady=PAD_LG)
         self._build_header()
         self._build_status_and_quick_launch()
-        self._build_gcli2api_section()
         self._build_provider_section()
         self._build_log_section()
 
-        # Tab 1: AI Gateway 仪表板
-        self.gateway_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
-        self.gateway_panel = GatewayPanel(
-            self.gateway_frame, self.model_manager, self.gateway, self.lang, self.logger)
+        # Gemini 反代：独立服务的完整安装和使用流程
+        self.gcli_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
+        self.gcli_main_frame = ctk.CTkScrollableFrame(self.gcli_frame, fg_color=BG_PRIMARY)
+        self.gcli_main_frame.pack(fill="both", expand=True, padx=PAD_LG, pady=PAD_LG)
+        self._build_gcli2api_section(self.gcli_main_frame)
 
-        # Tab 2: V2 智能网关仪表板（余额/成本/路由/故障转移/通知）
+        # 本地网关：概览、供应商、请求日志归入同一功能域
+        self.gateway_hub_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
+        self._build_gateway_hub()
+
+        # 用量监控：本机用量、网关用量和官方余额
         self.v2_dashboard_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
         self.v2_dashboard_panel = V2DashboardPanel(
-            self.v2_dashboard_frame, self.gateway_v2, self.lang, self.logger)
+            self.v2_dashboard_frame, self.gateway_v2, self.lang, self.logger,
+            provider_manager=self.provider_manager)
 
-        # Tab 3: 模型管理
-        self.models_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
-        self._build_models_tab()
-
-        # Tab 4: 请求日志
-        self.logs_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
-        self._build_logs_tab()
-
-        # Tab 5: Claude Code 环境与外观设置
+        # Claude Code 环境与外观设置
         self.settings_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
         self._build_settings_tab()
 
-        self._current_tab = 0
+        self._current_tab = "switcher"
+
+    def _build_gateway_hub(self):
+        """Build a local-gateway workspace with clear secondary categories."""
+        self.gateway_subnav = ctk.CTkFrame(
+            self.gateway_hub_frame, fg_color=BG_SURFACE, corner_radius=10,
+            border_width=1, border_color=BORDER)
+        self.gateway_subnav.pack(fill="x", padx=PAD_LG, pady=(PAD_LG, PAD_SM))
+
+        self.gateway_subtabs = [
+            ("dashboard_tab", "overview"),
+            ("gateway_providers_tab", "providers"),
+            ("logs_tab", "logs"),
+        ]
+        self.gateway_sub_buttons = {}
+        for i, (key, name) in enumerate(self.gateway_subtabs):
+            self.gateway_subnav.grid_columnconfigure(i, weight=1, uniform="gateway-subnav")
+            button = ctk.CTkButton(
+                self.gateway_subnav, text=t(key, self.lang), height=34,
+                fg_color=ACCENT if i == 0 else "transparent",
+                hover_color=ACCENT_HOVER if i == 0 else BG_ELEVATED,
+                text_color=ACCENT_TEXT if i == 0 else TEXT_PRIMARY,
+                corner_radius=7,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+                command=lambda tab_name=name: self._switch_gateway_subtab(tab_name))
+            button.grid(row=0, column=i, sticky="ew", padx=PAD_XS, pady=PAD_XS)
+            self.gateway_sub_buttons[name] = button
+
+        self.gateway_content_frame = ctk.CTkFrame(
+            self.gateway_hub_frame, fg_color=BG_PRIMARY)
+        self.gateway_content_frame.pack(fill="both", expand=True, padx=PAD_LG, pady=(0, PAD_LG))
+
+        self.gateway_frame = ctk.CTkFrame(self.gateway_content_frame, fg_color=BG_PRIMARY)
+        self.gateway_panel = GatewayPanel(
+            self.gateway_frame, self.model_manager, self.gateway, self.lang, self.logger)
+
+        self.models_frame = ctk.CTkFrame(self.gateway_content_frame, fg_color=BG_PRIMARY)
+        self._build_models_tab()
+
+        self.logs_frame = ctk.CTkFrame(self.gateway_content_frame, fg_color=BG_PRIMARY)
+        self._build_logs_tab()
+
+        self._current_gateway_subtab = "overview"
+        self._switch_gateway_subtab("overview")
+
+    def _switch_gateway_subtab(self, name: str):
+        frames = {
+            "overview": self.gateway_frame,
+            "providers": self.models_frame,
+            "logs": self.logs_frame,
+        }
+        if name not in frames:
+            return
+        self._current_gateway_subtab = name
+        for tab_name, frame in frames.items():
+            if tab_name == name:
+                frame.pack(fill="both", expand=True)
+            else:
+                frame.pack_forget()
+            selected = tab_name == name
+            self.gateway_sub_buttons[tab_name].configure(
+                fg_color=ACCENT if selected else "transparent",
+                hover_color=ACCENT_HOVER if selected else BG_ELEVATED,
+                text_color=ACCENT_TEXT if selected else TEXT_PRIMARY)
+
+        if name == "overview":
+            self.gateway_panel._refresh_all()
+        elif name == "providers":
+            self._refresh_models_tab()
+        else:
+            self._refresh_logs_tab()
 
     def _build_header(self):
         header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
@@ -308,10 +430,11 @@ class MainWindow:
         value.grid(row=row, column=1, sticky="ew", pady=PAD_XS)
         return value
 
-    def _build_gcli2api_section(self):
+    def _build_gcli2api_section(self, parent=None):
         """Build the optional Gemini CLI reverse-proxy control card."""
+        parent = parent or self.main_frame
         card = ctk.CTkFrame(
-            self.main_frame, fg_color=BG_SURFACE, corner_radius=12,
+            parent, fg_color=BG_SURFACE, corner_radius=12,
             border_width=1, border_color=GEMINI_ACCENT)
         card.pack(fill="x", pady=(0, PAD_LG))
         card.grid_columnconfigure(1, weight=1)
@@ -330,7 +453,8 @@ class MainWindow:
 
         self.gcli_subtitle_label = self._bind_text(ctk.CTkLabel(
             card, text="", anchor="w", justify="left", wraplength=900,
-            font=ctk.CTkFont(size=10), text_color=TEXT_MUTED), "gcli_subtitle")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=TEXT_MUTED), "gcli_subtitle")
         self.gcli_subtitle_label.grid(row=1, column=0, columnspan=4, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_MD))
 
@@ -340,32 +464,61 @@ class MainWindow:
         credential.grid_columnconfigure(1, weight=1)
         self.gcli_password_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(size=10)), "gcli_password")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11)), "gcli_password")
         self.gcli_password_label.grid(row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
         self.gcli_password_var = ctk.StringVar(value="")
         self.gcli_password_entry = ctk.CTkEntry(
             credential, textvariable=self.gcli_password_var, show="•", height=34,
+            placeholder_text=self._ui("填写 API_PASSWORD，不是 Google 密钥",
+                                      "Enter API_PASSWORD, not a Google key"),
             fg_color=BG_INPUT, border_color=BORDER)
         self.gcli_password_entry.grid(row=0, column=1, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
+        self.gcli_generate_button = ctk.CTkButton(
+            credential, text=self._ui("生成并复制", "Generate & Copy"), width=100, height=34,
+            fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
+            command=self._generate_gcli_password)
+        self.gcli_generate_button.grid(row=0, column=2, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
         self.gcli_model_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(size=10)), "gcli_model")
-        self.gcli_model_label.grid(row=0, column=2, sticky="w", padx=(0, PAD_SM), pady=PAD_SM)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11)), "gcli_model")
+        self.gcli_model_label.grid(row=0, column=3, sticky="w", padx=(0, PAD_SM), pady=PAD_SM)
         self.gcli_model_var = ctk.StringVar(value="gemini-2.5-pro")
         self.gcli_model_combo = ctk.CTkComboBox(
             credential, values=["gemini-2.5-pro"], variable=self.gcli_model_var,
             width=230, height=34, fg_color=BG_INPUT, border_color=BORDER)
-        self.gcli_model_combo.grid(row=0, column=3, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
+        self.gcli_model_combo.grid(row=0, column=4, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
+        self.gcli_password_help = ctk.CTkLabel(
+            credential,
+            text=self._ui(
+                "密码来源：服务未运行时由你自己设置；若已从终端启动，请填写终端使用的 API_PASSWORD。不是 Google API Key。",
+                "Password source: choose it yourself before startup. If already started in a terminal, enter its API_PASSWORD. Not a Google API key."),
+            anchor="w", justify="left", wraplength=850,
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11))
+        self.gcli_password_help.grid(row=1, column=0, columnspan=5, sticky="ew",
+                                    padx=PAD_MD, pady=(0, PAD_SM))
 
         self.gcli_detail_label = ctk.CTkLabel(
             card, text=f"{DEFAULT_BASE_URL}  ·  {self.gcli2api.install_dir}",
             anchor="w", justify="left", wraplength=900, text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_MONO, size=9))
+            font=ctk.CTkFont(family=FONT_MONO, size=11))
         self.gcli_detail_label.grid(row=3, column=0, columnspan=4, sticky="ew",
                                    padx=PAD_LG, pady=(0, PAD_SM))
 
+        guide = ctk.CTkFrame(card, fg_color=BG_ELEVATED, corner_radius=8)
+        guide.grid(row=4, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+                   pady=(0, PAD_SM))
+        guide.grid_columnconfigure(0, weight=1)
+        self.gcli_guide_label = ctk.CTkLabel(
+            guide,
+            text=gcli_guide_text(self._gcli_status, False, self.lang),
+            anchor="w", justify="left", wraplength=880,
+            text_color=TEXT_PRIMARY, font=ctk.CTkFont(size=11, weight="bold"))
+        self.gcli_guide_label.grid(row=0, column=0, sticky="ew", padx=PAD_MD, pady=PAD_SM)
+        self.gcli_password_var.trace_add("write", self._on_gcli_password_change)
+
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.grid(row=4, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+        actions.grid(row=5, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                      pady=(0, PAD_LG))
         for column in range(4):
             actions.grid_columnconfigure(column, weight=1, uniform="gcli-actions")
@@ -406,9 +559,43 @@ class MainWindow:
             button.configure(state="disabled" if disabled else "normal")
         if message:
             self.gcli_state_label.configure(text=f"◌ {message}", text_color=INFO)
+            if hasattr(self, "gcli_guide_label"):
+                self.gcli_guide_label.configure(
+                    text=self._ui(f"正在执行｜{message} 请不要重复点击。",
+                                  f"Working | {message} Please do not click again."),
+                    text_color=INFO)
+
+    def _on_gcli_password_change(self, *_args):
+        if hasattr(self, "gcli_guide_label") and not self._gcli_busy:
+            self.gcli_guide_label.configure(
+                text=gcli_guide_text(self._gcli_status, bool(self._gcli_password()), self.lang),
+                text_color=TEXT_PRIMARY)
 
     def _gcli_password(self) -> str:
         return self.gcli_password_var.get().strip() if hasattr(self, "gcli_password_var") else ""
+
+    def _generate_gcli_password(self):
+        if self._gcli_status.running:
+            messagebox.showwarning(
+                t("notice", self.lang),
+                self._ui(
+                    "服务已经运行，不能为它重新生成密码。请填写该服务启动时使用的 API_PASSWORD。",
+                    "The service is already running. Enter the API_PASSWORD used when it was started."))
+            return
+        password = secrets.token_urlsafe(18)
+        self.gcli_password_var.set(password)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(password)
+        messagebox.showinfo(
+            self._ui("密码已生成", "Password generated"),
+            self._ui(
+                "已生成强密码并复制到剪贴板。\n\n这不是 Google API Key，也不需要申请。\n"
+                "下一步：\n1. 点击“启动服务”；\n2. 服务启动后点击“打开面板”；\n"
+                "3. 在面板粘贴同一个密码登录；\n4. 完成 Google OAuth。\n\n"
+                "注意：剪贴板中的密码可能被其他程序读取，用完后可复制普通文本覆盖。",
+                "A strong password was generated and copied. It is not a Google API key.\n\n"
+                "Next: 1. Click Start. 2. Open Panel. 3. Paste the same password to sign in. "
+                "4. Complete Google OAuth.\n\nClipboard contents may be visible to other apps; overwrite it after use."))
 
     def _run_gcli_worker(self, worker, done, busy_text: str):
         if self._gcli_busy:
@@ -488,6 +675,10 @@ class MainWindow:
         version = f" · {status.version}" if status.version else ""
         self.gcli_detail_label.configure(
             text=f"{status.base_url}{version}\n{detail}\n{status.install_dir}")
+        if hasattr(self, "gcli_guide_label"):
+            self.gcli_guide_label.configure(
+                text=gcli_guide_text(status, bool(self._gcli_password()), self.lang),
+                text_color=TEXT_PRIMARY if status.state not in {"error", "auth_required"} else DANGER)
         if status.models:
             values = list(status.models)
             self.gcli_model_combo.configure(values=values)
@@ -502,6 +693,48 @@ class MainWindow:
                 else t("gcli_install", self.lang),
                 state="disabled" if status.installed else "normal",
             )
+        start_button = getattr(self, "gcli_buttons", {}).get("gcli_start")
+        if start_button:
+            start_button.configure(
+                text=self._ui("已启动", "Started") if status.running else t("gcli_start", self.lang),
+                state="disabled" if status.running or not status.installed else "normal",
+            )
+        panel_button = getattr(self, "gcli_buttons", {}).get("gcli_panel")
+        if panel_button:
+            panel_button.configure(state="normal" if status.running else "disabled")
+        for key in ("gcli_add_claude", "gcli_add_gateway"):
+            button = getattr(self, "gcli_buttons", {}).get(key)
+            if button:
+                button.configure(state="normal" if status.ready else "disabled")
+        if hasattr(self, "gcli_generate_button"):
+            self.gcli_generate_button.configure(state="disabled" if status.running else "normal")
+        self.gcli_model_combo.configure(state="normal" if status.ready else "disabled")
+
+    def _gcli_start_success_message(self, status: Gcli2ApiStatus) -> str:
+        if status.ready:
+            return self._ui(
+                f"gcli2api 服务已启动，可以调用。\n\n服务地址：{status.base_url}\n"
+                f"已发现模型：{len(status.models)} 个\n\n下一步：\n"
+                "1. 在“默认模型”中选择模型；\n"
+                "2. 点击“添加到 Claude”；\n"
+                "3. 在下方“API 供应商”找到 Gemini CLI (gcli2api)，点击“测试并使用”；\n"
+                "4. 选择项目目录，点击“快速启动 Claude”。",
+                f"gcli2api is running and ready.\n\nURL: {status.base_url}\n"
+                f"Models found: {len(status.models)}\n\nNext:\n"
+                "1. Select a Default Model.\n2. Click Add to Claude.\n"
+                "3. Find Gemini CLI (gcli2api) below and click Test & Use.\n"
+                "4. Choose a project and click Quick Launch Claude.")
+        return self._ui(
+            f"gcli2api 服务已启动。\n\n服务地址：{status.base_url}\n"
+            "目前还没有可用模型，下一步：\n"
+            "1. 点击“打开面板”；\n"
+            "2. 使用上方同一个本地 API 密码登录；\n"
+            "3. 在面板完成 Google OAuth；\n"
+            "4. 回到本软件，点击“检测服务”。",
+            f"gcli2api is running.\n\nURL: {status.base_url}\n"
+            "No models are available yet. Next:\n1. Click Open Panel.\n"
+            "2. Sign in with the same local API password.\n"
+            "3. Complete Google OAuth.\n4. Return here and click Check.")
 
     def _install_gcli2api(self):
         message = self._ui(
@@ -537,14 +770,24 @@ class MainWindow:
 
         def done(result, error):
             self._set_gcli_busy(False)
-            ok, message = result if result else (False, error or "Start failed")
+            if result:
+                ok, message, status = result
+            else:
+                ok, message, status = False, error or self._ui("启动失败", "Start failed"), self._gcli_status
+            self._gcli_status = status
+            self._render_gcli_status(status)
             self._append_log(message)
             if not ok:
-                messagebox.showerror(t("error", self.lang), message)
+                detail = message if self.lang == "zh" else self._gcli_display_message(status)
+                messagebox.showerror(
+                    t("error", self.lang),
+                    f"{detail}\n\n{gcli_guide_text(status, bool(password), self.lang)}")
                 return
-            self.root.after(1500, self._detect_gcli2api)
+            messagebox.showinfo(
+                self._ui("服务已启动", "Service started"),
+                self._gcli_start_success_message(status))
 
-        self._run_gcli_worker(lambda: self.gcli2api.start(password, password), done,
+        self._run_gcli_worker(lambda: self.gcli2api.start_and_wait(password, password), done,
                               self._ui("正在启动…", "Starting…"))
 
     def _open_gcli2api_panel(self):
@@ -570,6 +813,13 @@ class MainWindow:
         if ok:
             self._refresh_provider_list()
             self._append_log(message)
+            message = self._ui(
+                f"{message}\n\n已加入 Claude 供应商列表，但尚未切换。\n"
+                "下一步：在下方“API 供应商”找到 Gemini CLI (gcli2api)，点击“测试并使用”。\n"
+                "测试成功后，再选择项目目录并点击“快速启动 Claude”。",
+                f"{message}\n\nAdded to the Claude provider list, but not selected yet.\n"
+                "Next: find Gemini CLI (gcli2api) below and click Test & Use.\n"
+                "After it passes, choose a project and click Quick Launch Claude.")
         (messagebox.showinfo if ok else messagebox.showerror)(t("notice", self.lang), message)
 
     def _add_gcli2api_to_gateway(self):
@@ -733,16 +983,23 @@ class MainWindow:
                 pass
         for tip, key in self._tooltips:
             tip.configure(text=t(key, self.lang), lang=self.lang)
-        # 更新 Tab 按钮语言
-        tab_keys = ["providers_tab", "gateway_tab", "v2_dashboard_tab",
-                    "models_tab", "logs_tab", "settings_tab"]
-        for i, (name, btn) in enumerate(self.tab_buttons.items()):
-            if i < len(tab_keys):
-                btn.configure(text=t(tab_keys[i], self.lang))
+        # 更新一级和网关二级导航语言
+        for key, name in self.main_tabs:
+            self.tab_buttons[name].configure(text=t(key, self.lang))
+        for key, name in self.gateway_subtabs:
+            self.gateway_sub_buttons[name].configure(text=t(key, self.lang))
         # 更新 Gateway 面板语言
         if hasattr(self, 'gateway_panel'):
             self.gateway_panel.set_lang(self.lang)
         if hasattr(self, "gcli_state_label"):
+            self.gcli_password_entry.configure(
+                placeholder_text=self._ui("填写 API_PASSWORD，不是 Google 密钥",
+                                          "Enter API_PASSWORD, not a Google key"))
+            self.gcli_generate_button.configure(
+                text=self._ui("生成并复制", "Generate & Copy"))
+            self.gcli_password_help.configure(text=self._ui(
+                "密码来源：服务未运行时由你自己设置；若已从终端启动，请填写终端使用的 API_PASSWORD。不是 Google API Key。",
+                "Password source: choose it yourself before startup. If already started in a terminal, enter its API_PASSWORD. Not a Google API key."))
             self._render_gcli_status(self._gcli_status)
         self._refresh_project_source_label()
         self._refresh_provider_list()
@@ -841,7 +1098,7 @@ class MainWindow:
             return
         claude_path = self.claude_command_resolver.resolve()
         if not claude_path:
-            self._switch_tab(5)
+            self._switch_tab("settings")
             messagebox.showwarning(
                 t("launch_failed", self.lang),
                 self._ui("未检测到 Claude Code。请点击“一键安装 / 更新”，软件会自动下载、安装并配置 PATH。",
@@ -995,35 +1252,44 @@ class MainWindow:
     def _ui(self, zh: str, en: str) -> str:
         return zh if self.lang == "zh" else en
 
-    # === V1 AI Gateway Tab 切换 ===
+    # === 一级导航切换 ===
 
-    def _switch_tab(self, index: int):
-        """切换 Tab 页面"""
-        self._current_tab = index
-        frames = [self.switcher_frame, self.gateway_frame, self.v2_dashboard_frame,
-                  self.models_frame, self.logs_frame, self.settings_frame]
-        for i, frame in enumerate(frames):
-            if i == index:
+    def _switch_tab(self, tab):
+        """Switch main workspace by stable name; integers remain compatible."""
+        tab_names = [name for _, name in self.main_tabs]
+        if isinstance(tab, int):
+            if tab < 0 or tab >= len(tab_names):
+                return
+            tab = tab_names[tab]
+        frames = {
+            "switcher": self.switcher_frame,
+            "gcli": self.gcli_frame,
+            "gateway": self.gateway_hub_frame,
+            "usage": self.v2_dashboard_frame,
+            "settings": self.settings_frame,
+        }
+        if tab not in frames:
+            return
+        self._current_tab = tab
+        for name, frame in frames.items():
+            if name == tab:
                 frame.pack(fill="both", expand=True)
-                self.tab_buttons[list(self.tab_buttons.keys())[i]].configure(
+                self.tab_buttons[name].configure(
                     fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT)
             else:
                 frame.pack_forget()
-                self.tab_buttons[list(self.tab_buttons.keys())[i]].configure(
+                self.tab_buttons[name].configure(
                     fg_color="transparent", hover_color=BG_ELEVATED, text_color=TEXT_PRIMARY)
 
         # 刷新目标 Tab 数据
-        if index == 1:
-            self.gateway_panel._refresh_all()
-        elif index == 2:
-            # V2 智能网关仪表板
+        if tab == "gcli":
+            self._detect_gcli2api()
+        elif tab == "gateway":
+            self._switch_gateway_subtab(self._current_gateway_subtab)
+        elif tab == "usage":
             if hasattr(self, 'v2_dashboard_panel'):
-                self.v2_dashboard_panel._refresh_all()
-        elif index == 3:
-            self._refresh_models_tab()
-        elif index == 4:
-            self._refresh_logs_tab()
-        elif index == 5:
+                self.v2_dashboard_panel._refresh_balance()
+        elif tab == "settings":
             self._detect_claude_environment()
 
     def _build_models_tab(self):
@@ -1035,9 +1301,18 @@ class MainWindow:
         # 标题
         header = ctk.CTkFrame(frame, fg_color="transparent")
         header.pack(fill="x", pady=(0, PAD_LG))
-        ctk.CTkLabel(header, text=t("models_tab", self.lang),
-                     font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=TEXT_PRIMARY).pack(side="left")
+        title_box = ctk.CTkFrame(header, fg_color="transparent")
+        title_box.pack(side="left", fill="x", expand=True)
+        self.gateway_providers_title = self._bind_text(ctk.CTkLabel(
+            title_box, text="", font=ctk.CTkFont(
+                family=FONT_FAMILY, size=18, weight="bold"),
+            text_color=TEXT_PRIMARY), "gateway_providers_tab")
+        self.gateway_providers_title.pack(anchor="w")
+        self.gateway_providers_hint = self._bind_text(ctk.CTkLabel(
+            title_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=TEXT_MUTED, anchor="w", justify="left"),
+            "gateway_providers_hint")
+        self.gateway_providers_hint.pack(anchor="w", pady=(PAD_XS, 0))
 
         # 添加供应商按钮
         ctk.CTkButton(header, text=t("add_provider_title", self.lang), width=130, height=34,
@@ -1077,29 +1352,33 @@ class MainWindow:
         ptype = provider.get("provider_type", "custom")
         type_text = SUPPORTED_PROVIDERS.get(ptype, {}).get("name", t("custom_provider", self.lang))
         ctk.CTkLabel(top, text=type_text, text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(size=10)).pack(side="left", padx=PAD_SM)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                         side="left", padx=PAD_SM)
 
         # 操作按钮
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_MD))
 
         ctk.CTkButton(actions, text=t("test_key", self.lang), width=70, height=28,
-                      fg_color=INFO, hover_color=INFO_DARK, font=ctk.CTkFont(size=10),
+                      fg_color=INFO, hover_color=INFO_DARK,
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                       command=lambda pid=provider.get("id", ""): self._test_provider_key(pid)).pack(side="left", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=50, height=28,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
-                      font=ctk.CTkFont(size=10),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                       command=lambda p=provider: self._show_edit_gateway_provider_dialog(p)).pack(side="right", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=50, height=28,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
-                      font=ctk.CTkFont(size=10),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                       command=lambda p=provider: self._delete_gateway_provider(p)).pack(side="right")
 
         # 模型列表
         models = self.model_manager.get_models_by_provider(provider.get("id", ""))
         models_text = ", ".join([m.get("model_name", "") for m in models[:5]]) if models else "—"
         ctk.CTkLabel(card, text=f"{t('model', self.lang)}: {models_text}",
-                     text_color=TEXT_MUTED, font=ctk.CTkFont(size=10)).pack(anchor="w", padx=PAD_LG, pady=(0, PAD_SM))
+                     text_color=TEXT_MUTED,
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                         anchor="w", padx=PAD_LG, pady=(0, PAD_SM))
 
     def _show_add_gateway_provider_dialog(self):
         """显示添加供应商对话框"""
@@ -1146,7 +1425,7 @@ class MainWindow:
         heading = ctk.CTkFrame(frame, fg_color="transparent")
         heading.pack(fill="x", pady=(0, PAD_LG))
         ctk.CTkLabel(
-            heading, text=self._ui("设置与环境", "Settings & Environment"),
+            heading, text=self._ui("环境设置", "Setup"),
             font=ctk.CTkFont(family=FONT_FAMILY, size=22, weight="bold"),
             text_color=TEXT_PRIMARY).pack(anchor="w")
         ctk.CTkLabel(

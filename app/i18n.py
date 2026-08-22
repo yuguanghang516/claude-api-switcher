@@ -39,7 +39,7 @@ TEXTS = {
         "zh": "安装、检测并连接独立的 gcli2api 服务；支持 Claude、OpenAI 与 Gemini 三种调用格式。",
         "en": "Install, detect, and connect the independent gcli2api service with Claude, OpenAI, and Gemini-compatible APIs.",
     },
-    "gcli_password": {"zh": "API 密码", "en": "API Password"},
+    "gcli_password": {"zh": "本地 API 密码", "en": "Local API Password"},
     "gcli_model": {"zh": "默认模型", "en": "Default Model"},
     "gcli_detect": {"zh": "检测服务", "en": "Check"},
     "gcli_install": {"zh": "一键安装", "en": "Install"},
@@ -55,7 +55,7 @@ TEXTS = {
         "en": "Current Status",
     },
     "status_provider_label": {
-        "zh": "Provider",
+        "zh": "供应商",
         "en": "Provider",
     },
     "status_model_label": {
@@ -89,15 +89,15 @@ TEXTS = {
 
     # === Provider 区域 ===
     "api_providers": {
-        "zh": "API Providers",
+        "zh": "Claude API 供应商",
         "en": "API Providers",
     },
     "add_provider": {
-        "zh": "+ 添加 Provider",
+        "zh": "+ 添加供应商",
         "en": "+ Add Provider",
     },
     "no_providers_hint": {
-        "zh": "暂无 Provider，请点击上方按钮添加",
+        "zh": "暂无供应商，请点击上方按钮添加",
         "en": "No providers yet. Click the button above to add one.",
     },
     "current_badge": {
@@ -113,7 +113,7 @@ TEXTS = {
         "en": "Priority {}",
     },
     "key_prefix": {
-        "zh": "Key: {}",
+        "zh": "密钥：{}",
         "en": "Key: {}",
     },
     "set_current": {
@@ -191,19 +191,19 @@ TEXTS = {
 
     # === 对话框 ===
     "dialog_add_title": {
-        "zh": "添加 Provider",
+        "zh": "添加供应商",
         "en": "Add Provider",
     },
     "dialog_edit_title": {
-        "zh": "编辑 Provider - {}",
+        "zh": "编辑供应商 - {}",
         "en": "Edit Provider - {}",
     },
     "provider_config": {
-        "zh": "Provider 配置",
+        "zh": "供应商配置",
         "en": "Provider Configuration",
     },
     "field_name": {
-        "zh": "Provider 名称 *",
+        "zh": "供应商名称 *",
         "en": "Provider Name *",
     },
     "field_name_placeholder": {
@@ -211,10 +211,9 @@ TEXTS = {
         "en": "e.g. LongCat",
     },
     "tooltip_name": {
-        "zh": "Provider 就是你给这个 API 配置起的名字。\n"
+        "zh": "供应商名称就是你给这个 API 配置起的名字。\n"
               "比如 LongCat、DeepSeek、Anthropic 等。\n"
-              "起个好记的名字就行，方便你在多个 API 之间切换。\n"
-              "Provider = 服务商，就是提供 AI 能力的那一方。",
+              "起个好记的名字就行，方便你在多个 API 之间切换。",
         "en": "A Provider is a name you give to this API setup.\n"
               "e.g. LongCat, DeepSeek, Anthropic, etc.\n"
               "Just pick a memorable name — it helps you switch between APIs.\n"
@@ -261,7 +260,7 @@ TEXTS = {
         "en": "Lower number = higher priority",
     },
     "enable_provider": {
-        "zh": "启用此 Provider",
+        "zh": "启用此供应商",
         "en": "Enable this Provider",
     },
     "set_as_fallback": {
@@ -319,30 +318,30 @@ TEXTS = {
     "tooltip_priority": {
         "zh": "数字越小优先级越高。\n"
               "当开启「自动故障切换」时，\n"
-              "程序会按优先级顺序尝试可用的 Provider。",
+              "程序会按优先级顺序尝试可用的供应商。",
         "en": "Lower number = higher priority.\n"
               "When Auto Failover is enabled,\n"
               "the program tries providers in priority order.",
     },
     "tooltip_fallback": {
-        "zh": "勾选后，此 Provider 会被当作备用。\n"
-              "当主 Provider 出问题时，\n"
+        "zh": "勾选后，此供应商会被当作备用。\n"
+              "当主供应商出问题时，\n"
               "自动切换到这个备用 API。",
         "en": "If checked, this provider is used as backup.\n"
               "When the main provider fails,\n"
               "the app switches to this backup automatically.",
     },
     "tooltip_enable": {
-        "zh": "取消勾选可以禁用此 Provider。\n"
-              "禁用的 Provider 不会出现在切换列表中。",
+        "zh": "取消勾选可以禁用此供应商。\n"
+              "禁用的供应商不会出现在切换列表中。",
         "en": "Uncheck to disable this provider.\n"
               "Disabled providers won't appear in the switch list.",
     },
 
     # === 主界面 Tooltip ===
     "tooltip_status_provider": {
-        "zh": "当前正在使用的 API 服务商名称。\n"
-              "所有请求都会发给这个 Provider。",
+        "zh": "当前正在使用的 API 供应商名称。\n"
+              "所有请求都会发给这个供应商。",
         "en": "The currently active API provider.\n"
               "All requests go to this provider.",
     },
@@ -359,7 +358,7 @@ TEXTS = {
               "Requests are sent to this URL.",
     },
     "tooltip_status_state": {
-        "zh": "Provider 的就绪状态。\n"
+        "zh": "供应商的就绪状态。\n"
               "绿色表示已配置好可以正常使用。",
         "en": "Provider readiness status.\n"
               "Green means it's configured and ready to use.",
@@ -371,33 +370,33 @@ TEXTS = {
               "Claude will work in this directory.",
     },
     "tooltip_set_current": {
-        "zh": "点击把这个 Provider 设为当前使用。\n"
+        "zh": "点击把这个供应商设为当前使用。\n"
               "之后启动 Claude Code 就会用这个 API。",
         "en": "Click to set this provider as active.\n"
               "Claude Code will use this API when launched.",
     },
     "tooltip_test": {
-        "zh": "测试这个 Provider 是否可用。\n"
+        "zh": "测试这个供应商是否可用。\n"
               "会发送一个简单的请求检查连通性。\n"
-              "建议添加新 Provider 后先测试一下。",
+              "建议添加新供应商后先测试一下。",
         "en": "Test if this provider is reachable.\n"
               "Sends a simple request to check connectivity.\n"
               "Recommended after adding a new provider.",
     },
     "tooltip_edit": {
-        "zh": "修改这个 Provider 的配置。\n"
+        "zh": "修改这个供应商的配置。\n"
               "可以改名称、地址、模型、Key 等。",
         "en": "Edit this provider's configuration.\n"
               "Change name, URL, model, key, etc.",
     },
     "tooltip_delete": {
-        "zh": "删除这个 Provider。\n"
+        "zh": "删除这个供应商。\n"
               "删除后无法恢复，请谨慎操作。",
         "en": "Delete this provider.\n"
               "Cannot be undone. Please be careful.",
     },
     "tooltip_add_provider": {
-        "zh": "添加一个新的 API Provider。\n"
+        "zh": "添加一个新的 API 供应商。\n"
               "你需要填写名称、API 地址、模型和 Key。",
         "en": "Add a new API provider.\n"
               "You'll need to fill in name, URL, model, and key.",
@@ -409,27 +408,27 @@ TEXTS = {
               "Auto failover tries providers in this order.",
     },
     "tooltip_fallback_badge": {
-        "zh": "这个是备用 Provider。\n"
-              "主 Provider 出问题时会自动切过来。",
+        "zh": "这是备用供应商。\n"
+              "主供应商出问题时会自动切过来。",
         "en": "This is a backup provider.\n"
               "Automatically used when the main one fails.",
     },
     "tooltip_current_badge": {
-        "zh": "这个 Provider 正在使用中。\n"
+        "zh": "这个供应商正在使用中。\n"
               "启动 Claude Code 会用它。",
         "en": "This provider is currently active.\n"
               "It will be used when launching Claude Code.",
     },
     "tooltip_auto_failover": {
-        "zh": "开启后，如果当前 Provider 请求失败，\n"
-              "程序会自动切换到下一个可用的 Provider。\n"
+        "zh": "开启后，如果当前供应商请求失败，\n"
+              "程序会自动切换到下一个可用的供应商。\n"
               "切换顺序按「优先级」数字从小到大。",
         "en": "If enabled and the current provider fails,\n"
               "the app auto-switches to the next available one.\n"
               "Switches in priority order (lowest number first).",
     },
     "tooltip_sync_claude": {
-        "zh": "开启后，切换 Provider 时\n"
+        "zh": "开启后，切换供应商时\n"
               "会自动把配置写入 Claude Code 的\n"
               "settings.json 文件。\n"
               "建议保持开启。",
@@ -438,7 +437,7 @@ TEXTS = {
               "Recommended to keep this on.",
     },
     "tooltip_launch_btn": {
-        "zh": "用当前选中的 Provider 启动 Claude Code。\n"
+        "zh": "用当前选中的供应商启动 Claude Code。\n"
               "Claude 会在你选择的项目目录下工作。",
         "en": "Launch Claude Code with the current provider.\n"
               "Claude will work in your selected project directory.",
@@ -459,7 +458,7 @@ TEXTS = {
     },
     "tooltip_import": {
         "zh": "从 JSON 文件导入配置。\n"
-              "会覆盖当前所有 Provider 设置。\n"
+              "会覆盖当前所有供应商设置。\n"
               "注意：API Key 需要重新手动填写。",
         "en": "Import configuration from a JSON file.\n"
               "Will overwrite all current provider settings.\n"
@@ -474,11 +473,11 @@ TEXTS = {
 
     # === 消息框 ===
     "msg_confirm_delete": {
-        "zh": "确定要删除 Provider '{}' 吗？\n\n此操作不可撤销。",
+        "zh": "确定要删除供应商 '{}' 吗？\n\n此操作不可撤销。",
         "en": "Delete Provider '{}'?\n\nThis cannot be undone.",
     },
     "msg_select_provider_first": {
-        "zh": "请先选择一个 Provider",
+        "zh": "请先选择一个供应商",
         "en": "Please select a provider first.",
     },
     "msg_select_project_first": {
@@ -494,7 +493,7 @@ TEXTS = {
         "en": "Config exported to:\n{}",
     },
     "msg_import_confirm": {
-        "zh": "导入将覆盖当前所有 Provider 配置，是否继续？",
+        "zh": "导入将覆盖当前所有供应商配置，是否继续？",
         "en": "Import will overwrite all current providers. Continue?",
     },
     "msg_import_success": {
@@ -503,7 +502,7 @@ TEXTS = {
 
     },
     "msg_name_required": {
-        "zh": "Provider 名称不能为空",
+        "zh": "供应商名称不能为空",
         "en": "Provider name is required.",
     },
     "msg_url_required": {
@@ -515,7 +514,7 @@ TEXTS = {
         "en": "Model name is required.",
     },
     "msg_name_exists": {
-        "zh": "已存在名为 '{}' 的 Provider",
+        "zh": "已存在名为 '{}' 的供应商",
         "en": "A provider named '{}' already exists.",
     },
 
@@ -555,17 +554,17 @@ TEXTS = {
     "save_failed": {"zh": "保存失败", "en": "Save Failed"},
     "select_project_dir": {"zh": "选择项目目录", "en": "Select Project Directory"},
     "confirm_import": {
-        "zh": "导入会替换当前 Provider 列表，且所有 API Key 都需要重新填写。是否继续？",
+        "zh": "导入会替换当前供应商列表，且所有 API Key 都需要重新填写。是否继续？",
         "en": "Import replaces the provider list and requires re-entering all API keys. Continue?",
     },
     "confirm_delete_title": {"zh": "确认删除", "en": "Confirm Delete"},
     "confirm_delete": {
-        "zh": "确定删除 Provider“{}”吗？其 API Key 也会从凭据管理器中删除。",
+        "zh": "确定删除供应商“{}”吗？其 API Key 也会从凭据管理器中删除。",
         "en": "Delete provider '{}'? Its API key will also be removed.",
     },
-    "field_enabled": {"zh": "启用这个 Provider", "en": "Enable this provider"},
+    "field_enabled": {"zh": "启用这个供应商", "en": "Enable this provider"},
     "msg_no_provider_key": {
-        "zh": "没有找到已启用且已填写 API Key 的 Provider，请先配置一个 API。",
+        "zh": "没有找到已启用且已填写 API Key 的供应商，请先配置一个 API。",
         "en": "No enabled provider with an API key was found. Configure one first.",
     },
     "msg_no_project_dir": {
@@ -624,13 +623,19 @@ TEXTS = {
     },
 
     # === V1 AI Gateway ===
-    "gateway_tab": {"zh": "AI 网关", "en": "AI Gateway"},
-    "v2_dashboard_tab": {"zh": "V2 智能", "en": "V2 Smart"},
-    "dashboard_tab": {"zh": "仪表板", "en": "Dashboard"},
+    "gateway_tab": {"zh": "本地网关", "en": "Local Gateway"},
+    "gcli_tab": {"zh": "Gemini 反代", "en": "Gemini Proxy"},
+    "v2_dashboard_tab": {"zh": "用量监控", "en": "Usage"},
+    "dashboard_tab": {"zh": "概览与模型", "en": "Overview & Models"},
     "models_tab": {"zh": "模型管理", "en": "Models"},
     "logs_tab": {"zh": "请求日志", "en": "Logs"},
-    "providers_tab": {"zh": "供应商", "en": "Providers"},
-    "settings_tab": {"zh": "设置", "en": "Settings"},
+    "gateway_providers_tab": {"zh": "网关供应商", "en": "Gateway Providers"},
+    "gateway_providers_hint": {
+        "zh": "管理仅供本地网关使用的 API 供应商及其模型。Claude 直连供应商请在“API 切换”中管理。",
+        "en": "Manage API providers and models used by the local gateway. Manage direct Claude providers under API Switching.",
+    },
+    "providers_tab": {"zh": "API 切换", "en": "API Switching"},
+    "settings_tab": {"zh": "环境设置", "en": "Setup"},
 
     # === 仪表板 ===
     "today_requests": {"zh": "今日请求", "en": "Today Requests"},

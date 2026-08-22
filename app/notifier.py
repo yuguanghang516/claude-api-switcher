@@ -153,7 +153,7 @@ class Notifier:
         """API 异常通知"""
         return self.notify(Notification(
             type=NotificationType.API_ERROR,
-            title=f"🔴 {provider} API 异常",
+            title=f"{provider} API 异常",
             message=f"模型: {model}\n错误: {error}" if model else f"错误: {error}",
             priority=NotificationPriority.HIGH,
             data={"provider": provider, "error": error, "model": model},
@@ -195,7 +195,7 @@ class Notifier:
         """Key 轮转通知"""
         return self.notify(Notification(
             type=NotificationType.KEY_ROTATED,
-            title=f"🔄 {provider} Key 已切换",
+            title=f"{provider} Key 已切换",
             message=f"从 {from_key} 切换到 {to_key}",
             priority=NotificationPriority.LOW,
             data={"provider": provider, "from": from_key, "to": to_key},

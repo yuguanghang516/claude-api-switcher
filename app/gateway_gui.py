@@ -121,7 +121,7 @@ class GatewayPanel:
         self.copy_btn = ctk.CTkButton(url_row, text=t("copy_url", self.lang), width=70, height=26,
                                        fg_color=BG_ELEVATED, hover_color=BORDER,
                                        text_color=TEXT_PRIMARY,
-                                       font=ctk.CTkFont(size=10),
+                                       font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                                        command=self._copy_url)
         self.copy_btn.pack(side="right")
 
@@ -138,8 +138,9 @@ class GatewayPanel:
 
         # 使用说明
         info_btn = ctk.CTkButton(
-            btn_row, text="ℹ", width=36, height=36,
+            btn_row, text="说明", width=58, height=36,
             fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             command=self._show_info)
         info_btn.pack(side="left")
 
@@ -166,7 +167,8 @@ class GatewayPanel:
         card.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else PAD_XS, PAD_XS if col < 3 else 0))
 
         title = ctk.CTkLabel(card, text=t(title_key, self.lang),
-                              text_color=TEXT_MUTED, font=ctk.CTkFont(size=10))
+                              text_color=TEXT_MUTED,
+                              font=ctk.CTkFont(family=FONT_FAMILY, size=11))
         title.pack(anchor="w", padx=PAD_MD, pady=(PAD_MD, 0))
 
         value_label = ctk.CTkLabel(card, text=value, text_color=color,
@@ -230,7 +232,8 @@ class GatewayPanel:
                                        ("context_length", "context_length", 1), ("status", "status", 1),
                                        ("actions", "actions", 1)]:
             lbl = ctk.CTkLabel(header, text=t(text_key, self.lang),
-                               text_color=TEXT_MUTED, font=ctk.CTkFont(size=10))
+                               text_color=TEXT_MUTED,
+                               font=ctk.CTkFont(family=FONT_FAMILY, size=11))
             lbl.pack(side="left", padx=PAD_MD, pady=PAD_XS)
 
         # 模型行
@@ -250,20 +253,23 @@ class GatewayPanel:
 
         # 供应商
         ctk.CTkLabel(row, text=model.get("provider_name", "—"), text_color=TEXT_SECONDARY,
-                     font=ctk.CTkFont(size=10)).pack(side="left", padx=PAD_MD, pady=PAD_SM)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                         side="left", padx=PAD_MD, pady=PAD_SM)
 
         # 上下文长度
         ctx = model.get("context_length", 0)
         ctx_text = f"{ctx // 1000}K" if ctx >= 1000 else str(ctx)
         ctk.CTkLabel(row, text=ctx_text, text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(size=10)).pack(side="left", padx=PAD_MD, pady=PAD_SM)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                         side="left", padx=PAD_MD, pady=PAD_SM)
 
         # 状态
         is_enabled = model.get("status") == "enabled"
         status_color = SUCCESS if is_enabled else TEXT_MUTED
         status_text = t("enabled", self.lang) if is_enabled else t("disabled", self.lang)
         ctk.CTkLabel(row, text=status_text, text_color=status_color,
-                     font=ctk.CTkFont(size=10)).pack(side="left", padx=PAD_MD, pady=PAD_SM)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                         side="left", padx=PAD_MD, pady=PAD_SM)
 
         # 操作按钮
         actions = ctk.CTkFrame(row, fg_color="transparent")
@@ -272,11 +278,11 @@ class GatewayPanel:
         toggle_text = t("disabled", self.lang) if is_enabled else t("enabled", self.lang)
         ctk.CTkButton(actions, text=toggle_text, width=50, height=24,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
-                      font=ctk.CTkFont(size=9),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                       command=lambda m=model: self._toggle_model(m)).pack(side="left", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=40, height=24,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
-                      font=ctk.CTkFont(size=9),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
                       command=lambda m=model: self._delete_model(m)).pack(side="left")
 
     def _build_log_section(self):
@@ -296,17 +302,17 @@ class GatewayPanel:
         self.refresh_log_btn = ctk.CTkButton(
             head, text=t("refresh_logs", self.lang), width=60, height=24,
             fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
-            font=ctk.CTkFont(size=10), command=self._refresh_logs)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11), command=self._refresh_logs)
         self.refresh_log_btn.pack(side="right", padx=PAD_XS)
 
         self.clear_log_btn = self._bind_text(ctk.CTkButton(
             head, text="", width=60, height=24, fg_color="transparent",
-            hover_color=BORDER, font=ctk.CTkFont(size=10),
+            hover_color=BORDER, font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             command=self._clear_logs), "clear_logs")
         self.clear_log_btn.pack(side="right")
 
         self.log_text = ctk.CTkTextbox(frame, height=150, fg_color=BG_INPUT,
-                                        font=ctk.CTkFont(family=FONT_MONO, size=10), state="disabled")
+                                        font=ctk.CTkFont(family=FONT_MONO, size=11), state="disabled")
         self.log_text.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
     def _refresh_logs(self):

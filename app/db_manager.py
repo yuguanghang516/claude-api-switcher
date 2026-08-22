@@ -112,6 +112,7 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_time ON request_logs(request_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_model ON request_logs(model)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_status ON request_logs(status)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_provider ON request_logs(provider)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stats_date ON token_stats(stat_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_models_status ON models(status)")
@@ -418,6 +419,39 @@ class DatabaseManager:
             SELECT * FROM request_logs WHERE model=? ORDER BY request_time DESC LIMIT ?
         """, (model, limit)).fetchall()
         return [dict(r) for r in rows]
+
+    def get_usage_by_provider(self, start_time: int = 0,
+                              end_time: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Aggregate request logs without guessing missing historical providers."""
+        conn = self._get_conn()
+        end = int(end_time if end_time is not None else time.time())
+        rows = conn.execute("""
+            SELECT
+                COALESCE(NULLIF(TRIM(provider), ''), '历史记录未标注') AS provider,
+                COUNT(*) AS total_requests,
+                SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_requests,
+                SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END) AS failed_requests,
+                COALESCE(SUM(input_tokens), 0) AS input_tokens,
+                COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens
+            FROM request_logs
+            WHERE request_time >= ? AND request_time <= ?
+            GROUP BY COALESCE(NULLIF(TRIM(provider), ''), '历史记录未标注')
+            ORDER BY total_tokens DESC, total_requests DESC
+        """, (max(0, int(start_time)), end)).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_provider_usage_overview(self, now: Optional[datetime] = None) -> Dict[str, List[Dict[str, Any]]]:
+        """Return today, current-month and all-time gateway usage by provider."""
+        current = now or datetime.now()
+        today_start = int(current.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        month_start = int(current.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+        end = int(current.timestamp())
+        return {
+            "today": self.get_usage_by_provider(today_start, end),
+            "month": self.get_usage_by_provider(month_start, end),
+            "all_time": self.get_usage_by_provider(0, end),
+        }
 
     def clear_old_logs(self, days: int = 30):
         """清理旧日志"""
