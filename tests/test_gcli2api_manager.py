@@ -152,6 +152,97 @@ def test_extract_models_deduplicates_and_ignores_invalid():
     assert result == ("gemini-a",)
 
 
+@pytest.mark.parametrize("model,expected", [
+    ("gemini-3.1-pro-high", True),
+    ("claude-sonnet-4-6", True),
+    ("gpt-oss-120b-medium", True),
+    ("gemini-3.1-flash-image", False),
+    ("gemini-pro-agent", False),
+    ("chat_20706", False),
+    ("tab_jump_flash_lite_preview", False),
+])
+def test_claude_text_model_filter(model, expected):
+    assert Gcli2ApiManager.is_claude_text_model(model) is expected
+
+
+def test_import_antigravity_credentials_uses_panel_upload_api(monkeypatch, manager, tmp_path):
+    first = tmp_path / "ag-one.json"
+    second = tmp_path / "ag-two.json"
+    first.write_text('{"refresh_token":"hidden-one"}', encoding="utf-8")
+    second.write_text('{"refresh_token":"hidden-two"}', encoding="utf-8")
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen.update(url=url, **kwargs)
+        return FakeResponse(200, {
+            "uploaded_count": 2,
+            "results": [
+                {"filename": "ag-one.json", "status": "success"},
+                {"filename": "ag-two.json", "status": "success"},
+            ],
+        })
+
+    monkeypatch.setattr("app.gcli2api_manager.requests.post", fake_post)
+    result = manager.import_credentials([first, second], "panel-secret")
+
+    assert result.ok and result.uploaded_count == 2
+    assert seen["url"].endswith("/creds/upload")
+    assert seen["params"] == {"mode": "antigravity"}
+    assert seen["headers"]["Authorization"] == "Bearer panel-secret"
+    assert seen["allow_redirects"] is False
+    assert [item[0] for item in seen["files"]] == ["files", "files"]
+    assert "panel-secret" not in result.message
+    assert "hidden-one" not in result.message
+
+
+def test_import_credentials_rejects_invalid_json_before_network(monkeypatch, manager, tmp_path):
+    invalid = tmp_path / "bad.json"
+    invalid.write_text("[]", encoding="utf-8")
+    monkeypatch.setattr(
+        "app.gcli2api_manager.requests.post", lambda *args, **kwargs: pytest.fail("no network"))
+
+    result = manager.import_credentials([invalid], "secret")
+
+    assert not result.ok
+    assert "顶层必须是对象" in result.errors[0]
+
+
+def test_model_quotas_aggregate_best_remaining_and_credential_count(monkeypatch, manager):
+    responses = iter((
+        FakeResponse(200, {"items": [
+            {"filename": "ag-one.json", "disabled": False},
+            {"filename": "ag-two.json", "disabled": False},
+            {"filename": "disabled.json", "disabled": True},
+        ]}),
+        FakeResponse(200, {"models": {
+            "gemini-pro": {"remaining": 0.25, "resetTime": "08-23 11:00"},
+            "gemini-flash": {"remaining": 1.0, "resetTime": "08-23 10:00"},
+        }}),
+        FakeResponse(200, {"models": {
+            "gemini-pro": {"remaining": 0.8, "resetTime": "08-23 12:00"},
+        }}),
+    ))
+    monkeypatch.setattr(
+        "app.gcli2api_manager.requests.get", lambda *args, **kwargs: next(responses))
+
+    snapshot = manager.get_model_quotas("panel-secret")
+
+    assert snapshot.ok and snapshot.credential_count == 2
+    by_model = {item.model: item for item in snapshot.models}
+    assert by_model["gemini-pro"].remaining_percent == 80
+    assert by_model["gemini-pro"].credential_count == 2
+    assert by_model["gemini-pro"].reset_time == "08-23 12:00"
+    assert by_model["gemini-flash"].remaining_percent == 100
+
+
+def test_model_quotas_reports_panel_password_mismatch(monkeypatch, manager):
+    monkeypatch.setattr(
+        "app.gcli2api_manager.requests.get", lambda *args, **kwargs: FakeResponse(403))
+    snapshot = manager.get_model_quotas("wrong")
+    assert not snapshot.ok
+    assert "密码" in snapshot.message
+
+
 def test_examples_never_include_real_password(manager):
     examples = manager.generate_examples("gemini-test")
     assert set(examples) == {"anthropic", "openai", "gemini"}
@@ -187,7 +278,7 @@ def test_detect_ready_sends_bearer_without_redirect(monkeypatch, manager):
 @pytest.mark.parametrize("code,error_code", [
     (302, "redirect"),
     (401, "auth_failed"),
-    (403, "forbidden"),
+        (403, "auth_failed"),
     (404, "not_found"),
     (429, "rate_limited"),
     (500, "server_error"),
@@ -369,7 +460,7 @@ def _startup_status(manager, state, *, running=False, ready=False, error_code=""
 
 def test_start_and_wait_does_not_duplicate_existing_ready_service(monkeypatch, manager):
     ready = _startup_status(manager, "ready", running=True, ready=True, models=("gemini-pro",))
-    monkeypatch.setattr(manager, "detect", lambda _password: ready)
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: ready)
     monkeypatch.setattr(manager, "start", lambda *_args: pytest.fail("must not start twice"))
 
     ok, message, status = manager.start_and_wait("secret", "secret")
@@ -382,7 +473,7 @@ def test_start_and_wait_reports_ready_only_after_http_probe(monkeypatch, manager
     stopped = _startup_status(manager, "stopped")
     ready = _startup_status(manager, "ready", running=True, ready=True, models=("gemini-pro",))
     states = iter((stopped, stopped, ready))
-    monkeypatch.setattr(manager, "detect", lambda _password: next(states))
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: next(states))
     monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
 
     ok, message, status = manager.start_and_wait("secret", "secret", timeout=1, poll_interval=0)
@@ -395,7 +486,7 @@ def test_start_and_wait_guides_oauth_after_service_starts(monkeypatch, manager):
     stopped = _startup_status(manager, "stopped")
     oauth = _startup_status(manager, "oauth_required", running=True, error_code="no_models")
     states = iter((stopped, oauth))
-    monkeypatch.setattr(manager, "detect", lambda _password: next(states))
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: next(states))
     monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
 
     ok, message, status = manager.start_and_wait("secret", "secret", timeout=1, poll_interval=0)
@@ -406,7 +497,7 @@ def test_start_and_wait_guides_oauth_after_service_starts(monkeypatch, manager):
 
 def test_start_and_wait_rejects_wrong_password_without_spawning(monkeypatch, manager):
     auth = _startup_status(manager, "auth_required", running=True, error_code="auth_failed")
-    monkeypatch.setattr(manager, "detect", lambda _password: auth)
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: auth)
     monkeypatch.setattr(manager, "start", lambda *_args: pytest.fail("must not start on occupied port"))
 
     ok, message, status = manager.start_and_wait("wrong", "wrong")
@@ -417,7 +508,7 @@ def test_start_and_wait_rejects_wrong_password_without_spawning(monkeypatch, man
 
 def test_start_and_wait_reports_process_exit(monkeypatch, manager):
     stopped = _startup_status(manager, "stopped")
-    monkeypatch.setattr(manager, "detect", lambda _password: stopped)
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: stopped)
 
     def fake_start(*_args):
         manager._managed_process = SimpleNamespace(poll=lambda: 7)
@@ -432,7 +523,7 @@ def test_start_and_wait_reports_process_exit(monkeypatch, manager):
 
 def test_start_and_wait_reports_timeout(monkeypatch, manager):
     stopped = _startup_status(manager, "stopped")
-    monkeypatch.setattr(manager, "detect", lambda _password: stopped)
+    monkeypatch.setattr(manager, "detect", lambda _password, _mode=None: stopped)
     monkeypatch.setattr(manager, "start", lambda *_args: (True, "process created"))
     times = iter((0.0, 1.0))
     monkeypatch.setattr("app.gcli2api_manager.time.monotonic", lambda: next(times))

@@ -36,18 +36,31 @@ TEXTS = {
         "en": "Gemini Proxy · gcli2api",
     },
     "gcli_subtitle": {
-        "zh": "安装、检测并连接独立的 gcli2api 服务；支持 Claude、OpenAI 与 Gemini 三种调用格式。",
-        "en": "Install, detect, and connect the independent gcli2api service with Claude, OpenAI, and Gemini-compatible APIs.",
+        "zh": "个人用户使用 Antigravity，企业许可证用户可切换 Gemini CLI；软件会自动检测并接入 Claude。",
+        "en": "Use Antigravity for personal accounts, or Gemini CLI with an enterprise license; detection and Claude setup are automatic.",
     },
     "gcli_password": {"zh": "本地 API 密码", "en": "Local API Password"},
+    "gcli_mode": {"zh": "接入模式", "en": "Access Mode"},
+    "gcli_mode_antigravity": {
+        "zh": "Antigravity（个人用户推荐）",
+        "en": "Antigravity (recommended for personal users)",
+    },
+    "gcli_mode_enterprise": {
+        "zh": "Gemini CLI（企业许可证）",
+        "en": "Gemini CLI (enterprise license)",
+    },
+    "gcli_next_step": {"zh": "下一步怎么做", "en": "What to do next"},
     "gcli_model": {"zh": "默认模型", "en": "Default Model"},
     "gcli_detect": {"zh": "检测服务", "en": "Check"},
     "gcli_install": {"zh": "一键安装", "en": "Install"},
     "gcli_start": {"zh": "启动服务", "en": "Start"},
     "gcli_panel": {"zh": "打开面板", "en": "Open Panel"},
-    "gcli_add_claude": {"zh": "添加到 Claude", "en": "Add to Claude"},
-    "gcli_add_gateway": {"zh": "添加到网关", "en": "Add to Gateway"},
+    "gcli_add_claude": {"zh": "接入 Claude（自动切换）", "en": "Claude Auto Failover"},
+    "gcli_add_gateway": {"zh": "一键接入网关", "en": "Connect to Gateway"},
     "gcli_examples": {"zh": "调用示例", "en": "Examples"},
+    "gcli_import_credentials": {"zh": "导入凭证 JSON", "en": "Import Credential JSON"},
+    "gcli_refresh_quota": {"zh": "刷新额度", "en": "Refresh Quota"},
+    "gcli_quota_title": {"zh": "模型额度", "en": "Model Quota"},
 
     # === 当前状态 ===
     "current_status": {
@@ -246,6 +259,10 @@ TEXTS = {
     "field_key": {
         "zh": "API Key *",
         "en": "API Key *",
+    },
+    "field_api_key": {
+        "zh": "API Key / 本地 API 密码 *",
+        "en": "API Key / Local API Password *",
     },
     "field_key_placeholder": {
         "zh": "你的 API Key",

@@ -37,6 +37,7 @@ def test_scanner_summarizes_without_retaining_content(tmp_path):
     assert result["today"] == {
         "calls": 1, "input_tokens": 10, "output_tokens": 5,
         "cache_creation_input_tokens": 3, "cache_read_input_tokens": 2,
+        "content_tokens": 15, "cache_tokens": 5,
         "total_tokens": 20,
     }
     assert result["models"][0]["model"] == "LongCat-2.0"
@@ -104,3 +105,17 @@ def test_scanner_builds_seven_day_hourly_heatmap(tmp_path):
                if item["date"] == parsed.date().isoformat())
     assert row["hours"][parsed.hour] == 120
     assert sum(sum(item["hours"]) for item in result["heatmap"]) == 120
+
+
+def test_heatmap_excludes_cache_tokens_but_summary_keeps_them(tmp_path):
+    timestamp = "2026-08-23T01:00:00Z"
+    _write_jsonl(tmp_path / "session.jsonl", [
+        _assistant("cache", timestamp, input_tokens=10, output_tokens=5,
+                   cache_creation_input_tokens=20, cache_read_input_tokens=1000),
+    ])
+    result = ClaudeUsageScanner(tmp_path).scan(
+        datetime(2026, 8, 23, 12, tzinfo=timezone.utc))
+
+    assert result["today"]["content_tokens"] == 15
+    assert result["today"]["cache_tokens"] == 1020
+    assert sum(sum(item["hours"]) for item in result["heatmap"]) == 15

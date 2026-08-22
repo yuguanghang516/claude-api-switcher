@@ -24,6 +24,8 @@ def _empty_stats() -> Dict[str, int]:
         "output_tokens": 0,
         "cache_creation_input_tokens": 0,
         "cache_read_input_tokens": 0,
+        "content_tokens": 0,
+        "cache_tokens": 0,
         "total_tokens": 0,
     }
 
@@ -89,6 +91,10 @@ class ClaudeUsageScanner:
             value = int(record[field])
             stats[field] += value
             total += value
+        stats["content_tokens"] += int(record["input_tokens"]) + int(record["output_tokens"])
+        stats["cache_tokens"] += (
+            int(record["cache_creation_input_tokens"]) + int(record["cache_read_input_tokens"])
+        )
         stats["total_tokens"] += total
 
     def scan(self, now: Optional[datetime] = None) -> Dict[str, object]:
@@ -163,7 +169,7 @@ class ClaudeUsageScanner:
         model_stats: Dict[str, Dict[str, int]] = {}
         for record in records.values():
             timestamp = record["timestamp"]
-            record_total = sum(int(record[field]) for field in TOKEN_FIELDS)
+            content_total = int(record["input_tokens"]) + int(record["output_tokens"])
             self._add(result["all_time"], record)
             if timestamp.strftime("%Y-%m") == month_key:
                 self._add(result["month"], record)
@@ -173,12 +179,12 @@ class ClaudeUsageScanner:
                 self._add(result["today"], record)
             heatmap_row = heatmap_hours.get(timestamp.date().isoformat())
             if heatmap_row is not None:
-                heatmap_row[timestamp.hour] += record_total
+                heatmap_row[timestamp.hour] += content_total
 
         result["models"] = [
             {"model": model, **stats}
             for model, stats in sorted(
-                model_stats.items(), key=lambda item: item[1]["total_tokens"], reverse=True)
+                model_stats.items(), key=lambda item: item[1]["content_tokens"], reverse=True)
         ]
         result["heatmap"] = [
             {"date": day, "hours": hours}

@@ -2,7 +2,6 @@
 AI Gateway 用量监控仪表板 GUI
 页面内容：
 - 用量与余额
-- 成本控制
 - 路由规则
 - 通知中心
 """
@@ -228,19 +227,17 @@ class V2DashboardPanel:
                 "数据口径：Claude 本机统计和网关日志不等于供应商账单；只有标注“官方余额”的数值才是账户余额。不会读取聊天内容。",
                 "Scope: local Claude usage and gateway logs are not provider bills. Only values marked Official Balance are account balances. Chat content is never read."))
             self.claude_usage_title.configure(
-                text=self._ui("Claude Code 本机用量", "Local Claude Code Usage"))
+                text=self._ui("Claude Code 本机用量（不含 Codex）", "Local Claude Code Usage (Codex excluded)"))
             self.heatmap_title.configure(
                 text=self._ui("近 7 天 Token 热力图", "7-Day Token Heatmap"))
             self.heatmap_note.configure(text=self._ui(
-                "按本地时间显示最近 7 天每小时的 Token 活跃度；颜色越深，用量越高。",
-                "Hourly token activity for the last 7 days in local time; darker cells mean higher usage."))
+                "仅统计 Claude Code 输入 + 输出 Token；缓存单独展示，不计入热力图。",
+                "Claude Code input + output tokens only; cache is shown separately and excluded from the heatmap."))
             self.token_heatmap.set_language(self.lang)
             self.gateway_usage_title.configure(
                 text=self._ui("各 API 本地网关用量", "Per-API Local Gateway Usage"))
             self.official_balance_title.configure(
                 text=self._ui("供应商账户余额", "Provider Account Balance"))
-            self.cost_title.configure(
-                text=self._ui("成本控制", "Cost Controls"))
             self.routing_title.configure(
                 text=self._ui("路由策略", "Routing"))
             self.routing_switch.configure(
@@ -265,9 +262,6 @@ class V2DashboardPanel:
 
         # 余额监控区
         self._build_balance_section()
-
-        # 成本控制区
-        self._build_cost_section()
 
         # 路由规则区
         self._build_routing_section()
@@ -320,7 +314,7 @@ class V2DashboardPanel:
         self.balance_scope_note.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
         self.claude_usage_title = ctk.CTkLabel(
-            card, text=self._ui("Claude Code 本机用量", "Local Claude Code Usage"),
+            card, text=self._ui("Claude Code 本机用量（不含 Codex）", "Local Claude Code Usage (Codex excluded)"),
             anchor="w",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
             text_color=TEXT_PRIMARY)
@@ -341,8 +335,8 @@ class V2DashboardPanel:
         self.heatmap_note = ctk.CTkLabel(
             card,
             text=self._ui(
-                "按本地时间显示最近 7 天每小时的 Token 活跃度；颜色越深，用量越高。",
-                "Hourly token activity for the last 7 days in local time; darker cells mean higher usage."),
+                "仅统计 Claude Code 输入 + 输出 Token；缓存单独展示，不计入热力图。",
+                "Claude Code input + output tokens only; cache is shown separately and excluded from the heatmap."),
             anchor="w", text_color=TEXT_MUTED,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
         self.heatmap_note.pack(fill="x", padx=PAD_LG, pady=(PAD_XS, PAD_SM))
@@ -372,53 +366,6 @@ class V2DashboardPanel:
         # 余额卡片容器
         self.balance_cards_frame = ctk.CTkFrame(card, fg_color="transparent")
         self.balance_cards_frame.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
-
-    def _build_cost_section(self):
-        """成本控制区"""
-        card = ctk.CTkFrame(self.main_frame, fg_color=BG_SURFACE, corner_radius=12,
-                            border_width=1, border_color=BORDER)
-        card.pack(fill="x", pady=(0, PAD_LG))
-
-        head = ctk.CTkFrame(card, fg_color="transparent")
-        head.pack(fill="x", padx=PAD_LG, pady=(PAD_MD, PAD_SM))
-
-        self.cost_title = ctk.CTkLabel(
-            head, text=self._ui("成本控制", "Cost Controls"),
-            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
-            text_color=TEXT_PRIMARY)
-        self.cost_title.pack(side="left")
-
-        # 预算进度
-        self.budget_frame = ctk.CTkFrame(card, fg_color="transparent")
-        self.budget_frame.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
-
-        # 每日预算
-        self.daily_budget_label = ctk.CTkLabel(
-            self.budget_frame, text="今日: $0 / $0 (0%)",
-            text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
-        self.daily_budget_label.pack(anchor="w", pady=PAD_XS)
-
-        self.daily_budget_bar = ctk.CTkProgressBar(self.budget_frame, height=8,
-                                                     fg_color=BG_INPUT, progress_color=SUCCESS)
-        self.daily_budget_bar.pack(fill="x", pady=(0, PAD_SM))
-        self.daily_budget_bar.set(0)
-
-        # 每月预算
-        self.monthly_budget_label = ctk.CTkLabel(
-            self.budget_frame, text="本月: $0 / $0 (0%)",
-            text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
-        self.monthly_budget_label.pack(anchor="w", pady=PAD_XS)
-
-        self.monthly_budget_bar = ctk.CTkProgressBar(self.budget_frame, height=8,
-                                                      fg_color=BG_INPUT, progress_color=INFO)
-        self.monthly_budget_bar.pack(fill="x", pady=(0, PAD_SM))
-        self.monthly_budget_bar.set(0)
-
-        # 各模型花费
-        self.model_cost_frame = ctk.CTkFrame(card, fg_color="transparent")
-        self.model_cost_frame.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
     def _build_routing_section(self):
         """路由规则区"""
@@ -495,7 +442,6 @@ class V2DashboardPanel:
     def _refresh_all(self):
         """刷新所有数据"""
         self._refresh_balance_display()
-        self._refresh_cost_display()
         self._refresh_routing_display()
         self._refresh_failover_display()
         self._refresh_notifications()
@@ -571,14 +517,14 @@ class V2DashboardPanel:
             month = self._claude_usage["month"]
             diagnostics = self._claude_usage["diagnostics"]
             self.claude_usage_summary.configure(text=self._ui(
-                f"今日 {today['calls']:,} 次 · 输入 {today['input_tokens']:,} · 输出 {today['output_tokens']:,} · "
-                f"缓存 {today['cache_creation_input_tokens'] + today['cache_read_input_tokens']:,} Token\n"
-                f"本月 {month['calls']:,} 次 · 合计 {month['total_tokens']:,} Token · "
-                f"已扫描 {diagnostics['files_scanned']:,} 个会话文件（只读取 usage 数字）",
-                f"Today {today['calls']:,} calls · input {today['input_tokens']:,} · output {today['output_tokens']:,} · "
-                f"cache {today['cache_creation_input_tokens'] + today['cache_read_input_tokens']:,} tokens\n"
-                f"This month {month['calls']:,} calls · {month['total_tokens']:,} tokens · "
-                f"{diagnostics['files_scanned']:,} session files scanned (usage numbers only)"))
+                f"今日 {today['calls']:,} 次 · 正文 {today['content_tokens']:,} Token "
+                f"（输入 {today['input_tokens']:,} + 输出 {today['output_tokens']:,}）· 缓存 {today['cache_tokens']:,}\n"
+                f"本月正文 {month['content_tokens']:,} Token · 缓存 {month['cache_tokens']:,} · "
+                f"已扫描 Claude Code 的 {diagnostics['files_scanned']:,} 个会话文件（不读取聊天内容，不扫描 Codex）",
+                f"Today {today['calls']:,} calls · content {today['content_tokens']:,} tokens "
+                f"(input {today['input_tokens']:,} + output {today['output_tokens']:,}) · cache {today['cache_tokens']:,}\n"
+                f"This month content {month['content_tokens']:,} tokens · cache {month['cache_tokens']:,} · "
+                f"{diagnostics['files_scanned']:,} Claude Code session files scanned (no chat content, no Codex)"))
             self.token_heatmap.set_data(self._claude_usage.get("heatmap", []))
             models = self._claude_usage.get("models", [])
             if models:
@@ -586,8 +532,8 @@ class V2DashboardPanel:
                     self._add_usage_row(
                         self.claude_usage_models_frame, item["model"],
                         self._ui(
-                            f"本月 {item['calls']:,} 次 · {item['total_tokens']:,} Token",
-                            f"Month {item['calls']:,} calls · {item['total_tokens']:,} tokens"))
+                            f"本月 {item['calls']:,} 次 · 正文 {item['content_tokens']:,} · 缓存 {item['cache_tokens']:,} Token",
+                            f"Month {item['calls']:,} calls · content {item['content_tokens']:,} · cache {item['cache_tokens']:,} tokens"))
             else:
                 self._empty_row(self.claude_usage_models_frame,
                                 self._ui("本月暂无 Claude Token 记录", "No Claude token records this month"))
@@ -660,7 +606,15 @@ class V2DashboardPanel:
         ctk.CTkLabel(row, text=name, text_color=TEXT_PRIMARY,
                      font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY, weight="bold")).grid(
                          row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
-        if info.status in {"official", "ok"}:
+        if info.status == "quota":
+            detail = self._ui(
+                f"模型配额 · {info.error} · {info.source}",
+                f"Model quota · {info.error} · {info.source}")
+            value = self._ui(
+                f"最低剩余 {info.percent_remaining:.0f}%",
+                f"Minimum {info.percent_remaining:.0f}% left")
+            value_color = WARNING if info.percent_remaining < 20 else SUCCESS
+        elif info.status in {"official", "ok"}:
             detail = self._ui(f"官方余额 · {info.source}", f"Official balance · {info.source}")
             value = f"{info.currency} {info.balance:,.2f}"
             value_color = SUCCESS
@@ -685,50 +639,6 @@ class V2DashboardPanel:
                 fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
                 command=lambda url=info.portal_url: webbrowser.open(url)).grid(
                     row=0, column=3, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
-
-    def _refresh_cost_display(self):
-        """刷新成本显示"""
-        if not hasattr(self.gateway, 'cost_controller'):
-            return
-
-        status = self.gateway.cost_controller.get_status()
-
-        # 每日预算
-        self.daily_budget_label.configure(
-            text=f"今日: ${status.daily_used:.2f} / ${status.daily_limit:.2f} ({status.daily_percent:.0f}%)")
-        self.daily_budget_bar.set(min(status.daily_percent / 100, 1))
-        if status.daily_percent >= 100:
-            self.daily_budget_bar.configure(progress_color=DANGER)
-        elif status.daily_percent >= 80:
-            self.daily_budget_bar.configure(progress_color=WARNING)
-        else:
-            self.daily_budget_bar.configure(progress_color=SUCCESS)
-
-        # 每月预算
-        self.monthly_budget_label.configure(
-            text=f"本月: ${status.monthly_used:.2f} / ${status.monthly_limit:.2f} ({status.monthly_percent:.0f}%)")
-        self.monthly_budget_bar.set(min(status.monthly_percent / 100, 1))
-        if status.monthly_percent >= 100:
-            self.monthly_budget_bar.configure(progress_color=DANGER)
-        elif status.monthly_percent >= 80:
-            self.monthly_budget_bar.configure(progress_color=WARNING)
-        else:
-            self.monthly_budget_bar.configure(progress_color=INFO)
-
-        # 各模型花费
-        for widget in self.model_cost_frame.winfo_children():
-            widget.destroy()
-
-        daily_by_model = self.gateway.cost_controller.get_daily_usage_by_model()
-        if daily_by_model:
-            ctk.CTkLabel(self.model_cost_frame, text="今日各模型花费:",
-                         text_color=TEXT_MUTED,
-                         font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(anchor="w")
-            for model, cost in sorted(daily_by_model.items(), key=lambda x: -x[1]):
-                ctk.CTkLabel(self.model_cost_frame,
-                             text=f"  {model}: ${cost:.4f}",
-                             text_color=TEXT_SECONDARY,
-                             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(anchor="w")
 
     def _refresh_routing_display(self):
         """刷新路由规则显示"""

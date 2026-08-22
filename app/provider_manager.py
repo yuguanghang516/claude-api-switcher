@@ -171,6 +171,7 @@ class ProviderManager:
         result = self.tester.test_provider(
             provider.get("base_url", ""), api_key, provider.get("model", ""),
             provider.get("auth_mode", "bearer"),
+            provider.get("provider_kind", "custom"),
         )
         key = self._credential_key(provider)
         if result[0]:

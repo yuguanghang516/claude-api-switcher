@@ -3,7 +3,6 @@ V2 通知系统模块
 支持：
 - 余额不足提醒
 - API 异常提醒
-- 预算超限提醒
 
 通知方式：
 - 桌面通知
@@ -22,8 +21,6 @@ class NotificationType(Enum):
     """通知类型"""
     LOW_BALANCE = "low_balance"
     API_ERROR = "api_error"
-    BUDGET_EXCEEDED = "budget_exceeded"
-    BUDGET_WARNING = "budget_warning"
     KEY_ROTATED = "key_rotated"
     FAILOVER_TRIGGERED = "failover_triggered"
     INFO = "info"
@@ -157,38 +154,6 @@ class Notifier:
             message=f"模型: {model}\n错误: {error}" if model else f"错误: {error}",
             priority=NotificationPriority.HIGH,
             data={"provider": provider, "error": error, "model": model},
-        ))
-
-    def notify_budget_exceeded(self, daily_used: float, daily_limit: float,
-                               monthly_used: float, monthly_limit: float,
-                               currency: str = "USD"):
-        """预算超限通知"""
-        return self.notify(Notification(
-            type=NotificationType.BUDGET_EXCEEDED,
-            title="🚨 预算已超限",
-            message=(f"今日: {currency} {daily_used:.2f} / {daily_limit:.2f}\n"
-                    f"本月: {currency} {monthly_used:.2f} / {monthly_limit:.2f}\n"
-                    f"已自动切换至低成本模型"),
-            priority=NotificationPriority.CRITICAL,
-            data={
-                "daily_used": daily_used,
-                "daily_limit": daily_limit,
-                "monthly_used": monthly_used,
-                "monthly_limit": monthly_limit,
-            },
-        ))
-
-    def notify_budget_warning(self, daily_percent: float, monthly_percent: float,
-                              currency: str = "USD"):
-        """预算警告通知"""
-        return self.notify(Notification(
-            type=NotificationType.BUDGET_WARNING,
-            title="⚡ 预算即将用完",
-            message=(f"今日已使用: {daily_percent:.0f}%\n"
-                    f"本月已使用: {monthly_percent:.0f}%\n"
-                    f"请注意控制使用量"),
-            priority=NotificationPriority.MEDIUM,
-            data={"daily_percent": daily_percent, "monthly_percent": monthly_percent},
         ))
 
     def notify_key_rotated(self, provider: str, from_key: str, to_key: str):

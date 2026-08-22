@@ -81,6 +81,28 @@ class TestApiTesterMockedRequests:
         assert "429" in msg
 
     @patch("app.api_tester.requests.post")
+    def test_gcli_429_reports_quota_reset_instead_of_timeout(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 429
+        mock_response.json.return_value = {
+            "error": {
+                "status": "RESOURCE_EXHAUSTED",
+                "message": "You have exhausted your capacity on this model. Your quota will reset after 4h59m42s.",
+            }
+        }
+        mock_post.return_value = mock_response
+
+        success, msg, _ = ApiTester.test_provider(
+            "http://127.0.0.1:7861/antigravity", "local-password",
+            "gemini-2.5-pro", auth_mode="x-api-key", provider_kind="gcli2api")
+
+        assert success is False
+        assert "额度已用完" in msg
+        assert "4h59m42s" in msg
+        assert "超时" not in msg
+        assert "local-password" not in msg
+
+    @patch("app.api_tester.requests.post")
     def test_500_server_error(self, mock_post):
         """500 响应返回服务器错误"""
         mock_response = MagicMock()

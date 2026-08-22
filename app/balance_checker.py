@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from typing import Callable, Dict, List, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -120,6 +120,8 @@ class BalanceChecker:
         name = provider_name or normalized
         if normalized == "deepseek":
             result = self._check_deepseek_balance(api_key, provider_name=name)
+        elif normalized == "gcli2api":
+            result = self._check_gcli2api_quota(api_key, base_url, provider_name=name)
         else:
             result = self._unsupported(normalized, name, base_url)
         with self._cache_lock:
@@ -167,6 +169,82 @@ class BalanceChecker:
                     balance=amount, currency=currency, percent_remaining=-1,
                     status="official", **common)
         return BalanceInfo(status="error", error=error, **common)
+
+    def _check_gcli2api_quota(self, api_key: str, base_url: str,
+                              provider_name: str = "Gemini Antigravity") -> BalanceInfo:
+        parsed = urlparse(base_url)
+        host = (parsed.hostname or "").lower()
+        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+        common = {
+            "provider": provider_name,
+            "source": "gcli2api 配额接口（Google 返回）",
+            "portal_url": root,
+            "supports_balance": True,
+            "last_updated": int(time.time()),
+        }
+        if not api_key:
+            return BalanceInfo(status="error", error="本地 API 密码未设置", **common)
+        if not root or (parsed.scheme == "http" and host not in {"127.0.0.1", "localhost", "::1"}):
+            return BalanceInfo(status="error", error="gcli2api 地址不安全或无效", **common)
+        headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
+        try:
+            status_response = requests.get(
+                f"{root}/creds/status", headers=headers,
+                params={
+                    "offset": 0, "limit": 50, "status_filter": "enabled",
+                    "mode": "antigravity",
+                },
+                timeout=15, allow_redirects=False,
+            )
+            if status_response.status_code in {401, 403}:
+                return BalanceInfo(status="error", error="面板密码与本地 API 密码不一致", **common)
+            if status_response.status_code != 200:
+                return BalanceInfo(
+                    status="error", error=f"凭证接口返回 HTTP {status_response.status_code}", **common)
+            payload = status_response.json()
+            items = payload.get("items", []) if isinstance(payload, dict) else []
+            filenames = [
+                str(item.get("filename") or "") for item in items
+                if isinstance(item, dict) and not item.get("disabled")
+            ]
+            all_remaining = []
+            model_count = 0
+            for filename in filenames[:10]:
+                if not filename.endswith(".json"):
+                    continue
+                response = requests.get(
+                    f"{root}/creds/quota/{quote(filename, safe='')}",
+                    headers=headers, params={"mode": "antigravity"},
+                    timeout=30, allow_redirects=False,
+                )
+                if response.status_code != 200:
+                    continue
+                quota_payload = response.json()
+                models = quota_payload.get("models", {}) if isinstance(quota_payload, dict) else {}
+                if not isinstance(models, dict):
+                    continue
+                model_count += len(models)
+                for value in models.values():
+                    if not isinstance(value, dict):
+                        continue
+                    try:
+                        remaining = float(value.get("remaining"))
+                    except (TypeError, ValueError):
+                        continue
+                    all_remaining.append(max(0.0, min(1.0, remaining)))
+        except requests.exceptions.Timeout:
+            return BalanceInfo(status="error", error="gcli2api 配额查询超时", **common)
+        except (requests.exceptions.RequestException, ValueError, TypeError):
+            return BalanceInfo(status="error", error="无法读取 gcli2api 配额", **common)
+        if not all_remaining:
+            return BalanceInfo(status="error", error="没有可用的 Antigravity 配额数据", **common)
+        minimum = min(all_remaining) * 100
+        maximum = max(all_remaining) * 100
+        return BalanceInfo(
+            status="quota", percent_remaining=minimum,
+            error=f"{model_count} 个模型 · 最低 {minimum:.0f}% · 最高 {maximum:.0f}%",
+            **common,
+        )
 
     def _check_openai_balance(self, api_key: str, base_url: str = "") -> BalanceInfo:
         return self._unsupported("openai", "OpenAI", base_url)

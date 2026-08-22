@@ -3,7 +3,6 @@
 负责读取和保存增强网关相关配置：
 - 多 Key 配置
 - 路由规则
-- 预算控制
 - 通知设置
 - 热切换配置
 
@@ -55,15 +54,6 @@ DEFAULT_V2_CONFIG = {
     "routing_enabled": True,
     "default_task_type": "chat",
 
-    # ===== 预算控制 =====
-    "budget": {
-        "daily_limit_usd": 5.0,
-        "monthly_limit_usd": 100.0,
-        "warning_threshold": 0.8,  # 80% 提醒
-        "auto_switch_cheap": True,  # 100% 自动切换低成本
-        "currency": "USD",  # USD | CNY
-    },
-
     # ===== 通知设置 =====
     "notifications": {
         "enabled": True,
@@ -73,7 +63,6 @@ DEFAULT_V2_CONFIG = {
         "alert_on_low_balance": True,
         "low_balance_threshold": 10,  # 剩余少于 $10 提醒
         "alert_on_api_error": True,
-        "alert_on_budget_exceeded": True,
     },
 
     # ===== 余额检测 =====
@@ -300,30 +289,6 @@ class V2ConfigManager:
         """获取默认任务类型"""
         with self._lock:
             return self.config.get("default_task_type", "chat")
-
-    # ===== 预算控制 =====
-
-    def get_budget(self) -> Dict[str, Any]:
-        """获取预算配置"""
-        with self._lock:
-            return copy.deepcopy(self.config.get("budget", DEFAULT_V2_CONFIG["budget"]))
-
-    def set_budget(self, budget: Dict[str, Any]) -> bool:
-        """设置预算配置"""
-        with self._lock:
-            previous = copy.deepcopy(self.config)
-            self.config["budget"] = copy.deepcopy(budget)
-            return self._save_with_rollback(previous)
-
-    def get_daily_limit(self) -> float:
-        """获取每日预算"""
-        with self._lock:
-            return self.config.get("budget", {}).get("daily_limit_usd", 5.0)
-
-    def get_monthly_limit(self) -> float:
-        """获取每月预算"""
-        with self._lock:
-            return self.config.get("budget", {}).get("monthly_limit_usd", 100.0)
 
     # ===== 通知设置 =====
 

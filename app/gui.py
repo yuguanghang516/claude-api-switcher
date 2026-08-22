@@ -26,9 +26,15 @@ from .v2_dashboard import V2DashboardPanel
 from .v2_config import V2ConfigManager
 from .gateway_server_v2 import GatewayServerV2
 from .claude_environment import ClaudeEnvironmentManager
-from .gcli2api_manager import Gcli2ApiManager, Gcli2ApiStatus, DEFAULT_BASE_URL
+from .gcli2api_manager import (
+    Gcli2ApiManager, Gcli2ApiStatus, DEFAULT_BASE_URL,
+    MODE_ANTIGRAVITY, MODE_GEMINI_CLI,
+)
 from .theme import LIGHT, DARK, theme
 from .version import APP_VERSION_NAME, app_title
+from .update_checker import (
+    REPO_URL, RELEASES_URL, CHANGELOG_URL, FEEDBACK_URL, check_for_updates,
+)
 
 
 ctk.set_default_color_theme("blue")
@@ -63,7 +69,8 @@ def _resource_path(relative_path: str) -> Path:
     return bundle_root / relative_path
 
 
-def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh") -> str:
+def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh",
+                    mode: str = MODE_ANTIGRAVITY) -> str:
     """Return the exact next action for the current gcli2api state."""
     if lang == "zh":
         if status.state == "unknown":
@@ -77,9 +84,11 @@ def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh"
         if status.state == "auth_required":
             return "需要处理｜当前密码与运行中服务的 API_PASSWORD 不一致。改成正确密码，再点击“检测服务”。"
         if status.state == "oauth_required":
-            return "操作步骤 3/4｜点击“打开面板” → 用同一密码登录 → 完成 Google OAuth → 回软件点击“检测服务”。"
+            if mode == MODE_ANTIGRAVITY:
+                return "操作步骤 3/4｜点击“打开面板” → 用同一密码登录 → 选择“Antigravity认证” → 确认“AG凭证”正常 → 回软件点击“检测服务”。"
+            return "操作步骤 3/4｜点击“打开面板” → 用同一密码登录 → 完成企业 Gemini CLI OAuth → 回软件点击“检测服务”。"
         if status.ready:
-            return "操作步骤 4/4｜选择模型 →“添加到 Claude”→ 在下方 API 供应商点“测试并使用”→ 选择项目并“快速启动 Claude”。"
+            return "操作步骤 4/4｜选择模型 → 点击“一键接入 Claude”→ 在下方供应商点“测试并使用”→ 选择项目并“快速启动 Claude”。"
         return f"需要处理｜{status.message or '服务状态异常'}；处理后点击“检测服务”重新确认。"
 
     if status.state == "unknown":
@@ -93,9 +102,11 @@ def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh"
     if status.state == "auth_required":
         return "Action needed | The password does not match API_PASSWORD of the running service. Correct it, then click Check."
     if status.state == "oauth_required":
-        return "Step 3/4 | Open Panel → sign in with the same password → complete Google OAuth → return and click Check."
+        if mode == MODE_ANTIGRAVITY:
+            return "Step 3/4 | Open Panel → sign in → choose Antigravity Auth → confirm an AG credential → return and click Check."
+        return "Step 3/4 | Open Panel → sign in → complete enterprise Gemini CLI OAuth → return and click Check."
     if status.ready:
-        return "Step 4/4 | Select a model → Add to Claude → click Test & Use below → choose a project and Quick Launch Claude."
+        return "Step 4/4 | Select a model → Connect to Claude → click Test & Use below → choose a project and Quick Launch Claude."
     return f"Action needed | {status.message or 'Service error'}. Fix it, then click Check again."
 
 
@@ -115,8 +126,11 @@ class MainWindow:
             install_dir=self.gcli2api.install_dir,
             message="等待检测")
         self._gcli_busy = False
+        self._gcli_quota_snapshot = None
         self._environment_queue = queue.Queue()
         self._environment_busy = False
+        self._update_queue = queue.Queue()
+        self._update_busy = False
         self.lang = self.config.get_language() or "zh"
         self._bindings = []
         self._tooltips = []
@@ -156,6 +170,7 @@ class MainWindow:
         self._update_language()
         self.root.after(100, self._poll_test_results)
         self.root.after(150, self._poll_environment_results)
+        self.root.after(180, self._poll_update_results)
         self.root.after(350, self._detect_claude_environment)
         self.root.after(700, self._detect_gcli2api)
 
@@ -433,6 +448,7 @@ class MainWindow:
     def _build_gcli2api_section(self, parent=None):
         """Build the optional Gemini CLI reverse-proxy control card."""
         parent = parent or self.main_frame
+        saved_password, saved_mode, saved_model = self._saved_gcli_connection()
         card = ctk.CTkFrame(
             parent, fg_color=BG_SURFACE, corner_radius=12,
             border_width=1, border_color=GEMINI_ACCENT)
@@ -443,17 +459,17 @@ class MainWindow:
         head.grid(row=0, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                   pady=(PAD_LG, PAD_XS))
         self.gcli_title_label = self._bind_text(ctk.CTkLabel(
-            head, text="", font=ctk.CTkFont(size=15, weight="bold"),
+            head, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold"),
             text_color=GEMINI_ACCENT), "gcli_title")
         self.gcli_title_label.pack(side="left")
         self.gcli_state_label = ctk.CTkLabel(
-            head, text="○ 等待检测", font=ctk.CTkFont(size=11, weight="bold"),
+            head, text="○ 等待检测", font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
             text_color=TEXT_MUTED)
         self.gcli_state_label.pack(side="right")
 
         self.gcli_subtitle_label = self._bind_text(ctk.CTkLabel(
             card, text="", anchor="w", justify="left", wraplength=900,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=TEXT_MUTED), "gcli_subtitle")
         self.gcli_subtitle_label.grid(row=1, column=0, columnspan=4, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_MD))
@@ -464,15 +480,24 @@ class MainWindow:
         credential.grid_columnconfigure(1, weight=1)
         self.gcli_password_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11)), "gcli_password")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_password")
         self.gcli_password_label.grid(row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
-        self.gcli_password_var = ctk.StringVar(value="")
+        self.gcli_password_var = ctk.StringVar(value=saved_password)
+        password_box = ctk.CTkFrame(credential, fg_color="transparent")
+        password_box.grid(row=0, column=1, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
         self.gcli_password_entry = ctk.CTkEntry(
-            credential, textvariable=self.gcli_password_var, show="•", height=34,
+            password_box, textvariable=self.gcli_password_var, show="•", height=34,
             placeholder_text=self._ui("填写 API_PASSWORD，不是 Google 密钥",
                                       "Enter API_PASSWORD, not a Google key"),
             fg_color=BG_INPUT, border_color=BORDER)
-        self.gcli_password_entry.grid(row=0, column=1, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
+        self.gcli_password_entry.pack(side="left", fill="x", expand=True)
+        self._gcli_password_visible = False
+        self.gcli_password_eye = ctk.CTkButton(
+            password_box, text=self._ui("查看", "Show"), width=52, height=34,
+            fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            command=self._toggle_gcli_password_visibility)
+        self.gcli_password_eye.pack(side="left", padx=(PAD_XS, 0))
         self.gcli_generate_button = ctk.CTkButton(
             credential, text=self._ui("生成并复制", "Generate & Copy"), width=100, height=34,
             fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
@@ -480,22 +505,43 @@ class MainWindow:
         self.gcli_generate_button.grid(row=0, column=2, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
         self.gcli_model_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11)), "gcli_model")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_model")
         self.gcli_model_label.grid(row=0, column=3, sticky="w", padx=(0, PAD_SM), pady=PAD_SM)
-        self.gcli_model_var = ctk.StringVar(value="gemini-2.5-pro")
+        self.gcli_model_var = ctk.StringVar(value=saved_model or "gemini-2.5-pro")
         self.gcli_model_combo = ctk.CTkComboBox(
             credential, values=["gemini-2.5-pro"], variable=self.gcli_model_var,
             width=230, height=34, fg_color=BG_INPUT, border_color=BORDER)
         self.gcli_model_combo.grid(row=0, column=4, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
+
+        self.gcli_mode_label = self._bind_text(ctk.CTkLabel(
+            credential, text="", text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode")
+        self.gcli_mode_label.grid(row=1, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=(0, PAD_SM))
+        self.gcli_mode_var = ctk.StringVar(value=saved_mode)
+        mode_box = ctk.CTkFrame(credential, fg_color="transparent")
+        mode_box.grid(row=1, column=1, columnspan=4, sticky="ew", padx=(0, PAD_MD), pady=(0, PAD_SM))
+        self.gcli_antigravity_radio = self._bind_text(ctk.CTkRadioButton(
+            mode_box, text="", variable=self.gcli_mode_var, value=MODE_ANTIGRAVITY,
+            command=self._on_gcli_mode_change, fg_color=GEMINI_ACCENT,
+            hover_color=GEMINI_HOVER,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode_antigravity")
+        self.gcli_antigravity_radio.pack(side="left", padx=(0, PAD_LG))
+        self.gcli_enterprise_radio = self._bind_text(ctk.CTkRadioButton(
+            mode_box, text="", variable=self.gcli_mode_var, value=MODE_GEMINI_CLI,
+            command=self._on_gcli_mode_change, fg_color=GEMINI_ACCENT,
+            hover_color=GEMINI_HOVER,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode_enterprise")
+        self.gcli_enterprise_radio.pack(side="left")
+
         self.gcli_password_help = ctk.CTkLabel(
             credential,
             text=self._ui(
                 "密码来源：服务未运行时由你自己设置；若已从终端启动，请填写终端使用的 API_PASSWORD。不是 Google API Key。",
                 "Password source: choose it yourself before startup. If already started in a terminal, enter its API_PASSWORD. Not a Google API key."),
             anchor="w", justify="left", wraplength=850,
-            text_color=TEXT_MUTED,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11))
-        self.gcli_password_help.grid(row=1, column=0, columnspan=5, sticky="ew",
+            text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+        self.gcli_password_help.grid(row=2, column=0, columnspan=5, sticky="ew",
                                     padx=PAD_MD, pady=(0, PAD_SM))
 
         self.gcli_detail_label = ctk.CTkLabel(
@@ -509,16 +555,53 @@ class MainWindow:
         guide.grid(row=4, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                    pady=(0, PAD_SM))
         guide.grid_columnconfigure(0, weight=1)
+        self.gcli_guide_title = self._bind_text(ctk.CTkLabel(
+            guide, text="", anchor="w",
+            text_color=GEMINI_ACCENT,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")),
+            "gcli_next_step")
+        self.gcli_guide_title.grid(row=0, column=0, sticky="ew", padx=PAD_MD,
+                                  pady=(PAD_MD, PAD_XS))
         self.gcli_guide_label = ctk.CTkLabel(
             guide,
-            text=gcli_guide_text(self._gcli_status, False, self.lang),
+            text=gcli_guide_text(self._gcli_status, False, self.lang, MODE_ANTIGRAVITY),
             anchor="w", justify="left", wraplength=880,
-            text_color=TEXT_PRIMARY, font=ctk.CTkFont(size=11, weight="bold"))
-        self.gcli_guide_label.grid(row=0, column=0, sticky="ew", padx=PAD_MD, pady=PAD_SM)
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="normal"))
+        self.gcli_guide_label.grid(row=1, column=0, sticky="ew", padx=PAD_MD,
+                                  pady=(0, PAD_MD))
         self.gcli_password_var.trace_add("write", self._on_gcli_password_change)
 
+        quota_card = ctk.CTkFrame(card, fg_color=BG_ELEVATED, corner_radius=8)
+        quota_card.grid(row=5, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+                        pady=(0, PAD_SM))
+        quota_head = ctk.CTkFrame(quota_card, fg_color="transparent")
+        quota_head.pack(fill="x", padx=PAD_MD, pady=(PAD_MD, PAD_XS))
+        self.gcli_quota_title = self._bind_text(ctk.CTkLabel(
+            quota_head, text="", text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")),
+            "gcli_quota_title")
+        self.gcli_quota_title.pack(side="left")
+        self.gcli_quota_summary = ctk.CTkLabel(
+            quota_head, text=self._ui("等待服务检测", "Waiting for service check"),
+            text_color=TEXT_MUTED,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+        self.gcli_quota_summary.pack(side="right")
+        self.gcli_quota_note = ctk.CTkLabel(
+            quota_card,
+            text=self._ui(
+                "平台配额为 Google / gcli2api 快照，可能滞后；若与真实调用冲突，以实测 429 为准。",
+                "Google / gcli2api quota is a snapshot and may lag; a real 429 takes precedence."),
+            anchor="w", justify="left", wraplength=850, text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+        self.gcli_quota_note.pack(fill="x", padx=PAD_MD, pady=(0, PAD_SM))
+        self.gcli_quota_list = ctk.CTkScrollableFrame(
+            quota_card, height=170, fg_color=BG_SURFACE, corner_radius=7)
+        self.gcli_quota_list.pack(fill="x", padx=PAD_MD, pady=(0, PAD_MD))
+        self._render_gcli_quotas(None)
+
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.grid(row=5, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+        actions.grid(row=6, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                      pady=(0, PAD_LG))
         for column in range(4):
             actions.grid_columnconfigure(column, weight=1, uniform="gcli-actions")
@@ -529,6 +612,8 @@ class MainWindow:
             ("gcli_install", self._install_gcli2api, GEMINI_ACCENT, GEMINI_HOVER),
             ("gcli_start", self._start_gcli2api, SUCCESS, SUCCESS_DARK),
             ("gcli_panel", self._open_gcli2api_panel, INFO, INFO_DARK),
+            ("gcli_import_credentials", self._import_gcli_credentials, BG_ELEVATED, BORDER),
+            ("gcli_refresh_quota", self._refresh_gcli_quotas, BG_ELEVATED, BORDER),
             ("gcli_add_claude", self._add_gcli2api_to_claude, GEMINI_ACCENT, GEMINI_HOVER),
             ("gcli_add_gateway", self._add_gcli2api_to_gateway, BG_ELEVATED, BORDER),
             ("gcli_examples", self._show_gcli2api_examples, BG_ELEVATED, BORDER),
@@ -550,7 +635,37 @@ class MainWindow:
             text_color=TEXT_PRIMARY,
             command=lambda: webbrowser.open("https://github.com/su-kaka/gcli2api")
         )
-        github_button.grid(row=1, column=3, sticky="ew", padx=(PAD_XS, 0), pady=PAD_XS)
+        github_button.grid(row=2, column=1, sticky="ew", padx=(PAD_XS, 0), pady=PAD_XS)
+
+    def _saved_gcli_connection(self):
+        """Restore an already saved gcli2api connection without exposing its password."""
+        for item in self.provider_manager.get_all_providers():
+            if item.get("provider_kind") != "gcli2api":
+                continue
+            detail = self.provider_manager.get_provider_detail(item.get("name", "")) or {}
+            base_url = str(detail.get("base_url") or "").lower()
+            name = str(detail.get("name") or item.get("name") or "").lower()
+            mode = (MODE_GEMINI_CLI if "enterprise" in name
+                    else MODE_ANTIGRAVITY)
+            if "/antigravity" in base_url:
+                mode = MODE_ANTIGRAVITY
+            return (
+                str(detail.get("api_key") or ""), mode,
+                str(detail.get("model") or "gemini-2.5-pro"),
+            )
+        for item in self.model_manager.get_all_providers():
+            if item.get("provider_type") != "gcli2api":
+                continue
+            base_url = str(item.get("base_url") or "").lower()
+            name = str(item.get("name") or "").lower()
+            mode = (MODE_GEMINI_CLI if "enterprise" in name
+                    else MODE_ANTIGRAVITY)
+            if "/antigravity" in base_url:
+                mode = MODE_ANTIGRAVITY
+            models = self.model_manager.get_models_by_provider(item.get("id", ""))
+            model = (models[0].get("model_name") if models else "gemini-2.5-pro")
+            return str(item.get("api_key") or ""), mode, str(model or "gemini-2.5-pro")
+        return "", MODE_ANTIGRAVITY, "gemini-2.5-pro"
 
     def _set_gcli_busy(self, busy: bool, message: str = ""):
         self._gcli_busy = busy
@@ -568,11 +683,183 @@ class MainWindow:
     def _on_gcli_password_change(self, *_args):
         if hasattr(self, "gcli_guide_label") and not self._gcli_busy:
             self.gcli_guide_label.configure(
-                text=gcli_guide_text(self._gcli_status, bool(self._gcli_password()), self.lang),
+                text=gcli_guide_text(
+                    self._gcli_status, bool(self._gcli_password()), self.lang, self._gcli_mode()),
                 text_color=TEXT_PRIMARY)
 
     def _gcli_password(self) -> str:
         return self.gcli_password_var.get().strip() if hasattr(self, "gcli_password_var") else ""
+
+    def _gcli_mode(self) -> str:
+        value = self.gcli_mode_var.get() if hasattr(self, "gcli_mode_var") else MODE_ANTIGRAVITY
+        return self.gcli2api.normalize_mode(value)
+
+    def _toggle_gcli_password_visibility(self):
+        self._gcli_password_visible = not getattr(self, "_gcli_password_visible", False)
+        self.gcli_password_entry.configure(show="" if self._gcli_password_visible else "•")
+        self.gcli_password_eye.configure(
+            text=self._ui("隐藏", "Hide") if self._gcli_password_visible else self._ui("查看", "Show"),
+            fg_color=GEMINI_ACCENT if self._gcli_password_visible else BG_INPUT,
+            text_color="#FFFFFF" if self._gcli_password_visible else TEXT_SECONDARY,
+        )
+
+    def _on_gcli_mode_change(self):
+        if self._gcli_busy:
+            return
+        self._gcli_status = Gcli2ApiStatus(
+            state="unknown", installed=self._gcli_status.installed,
+            running=self._gcli_status.running, base_url=self.gcli2api.base_url,
+            install_dir=self.gcli2api.install_dir, mode=self._gcli_mode(),
+            message=self._ui("正在检测所选模式…", "Checking the selected mode…"))
+        self._render_gcli_status(self._gcli_status)
+        self._render_gcli_quotas(None)
+        self._detect_gcli2api()
+
+    def _render_gcli_quotas(self, snapshot):
+        """Render a compact, text-labelled quota snapshot."""
+        if not hasattr(self, "gcli_quota_list"):
+            return
+        for widget in self.gcli_quota_list.winfo_children():
+            widget.destroy()
+        self._gcli_quota_snapshot = snapshot
+        if snapshot is None:
+            self.gcli_quota_summary.configure(
+                text=self._ui("尚未刷新", "Not refreshed"), text_color=TEXT_MUTED)
+            ctk.CTkLabel(
+                self.gcli_quota_list,
+                text=self._ui("启动并检测 Antigravity 服务后，可在这里查看每个模型的额度。",
+                              "Start and check Antigravity to view per-model quota here."),
+                anchor="w", justify="left", text_color=TEXT_MUTED,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                    fill="x", padx=PAD_SM, pady=PAD_SM)
+            return
+        if not snapshot.ok:
+            self.gcli_quota_summary.configure(text=snapshot.message, text_color=DANGER)
+            ctk.CTkLabel(
+                self.gcli_quota_list, text=snapshot.message, anchor="w",
+                text_color=DANGER,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                    fill="x", padx=PAD_SM, pady=PAD_SM)
+            return
+        visible_models = [
+            item for item in snapshot.models
+            if self.gcli2api.is_claude_text_model(item.model)
+        ]
+        self.gcli_quota_summary.configure(
+            text=self._ui(
+                f"{snapshot.credential_count} 个凭证 · {len(visible_models)} 个 Claude 文本模型",
+                f"{snapshot.credential_count} credentials · {len(visible_models)} Claude text models"),
+            text_color=SUCCESS)
+        for item in visible_models:
+            row = ctk.CTkFrame(self.gcli_quota_list, fg_color="transparent")
+            row.pack(fill="x", padx=PAD_XS, pady=PAD_XS)
+            row.grid_columnconfigure(0, weight=1)
+            percent = max(0, min(100, item.remaining_percent))
+            state = self._ui("可用", "Available")
+            color = SUCCESS
+            if percent <= 0:
+                state, color = self._ui("快照耗尽", "Snapshot exhausted"), DANGER
+            elif percent < 30:
+                state, color = self._ui("额度偏低", "Low quota"), ("#9A6700", "#FBBF24")
+            credential_text = self._ui(
+                f"{item.credential_count} 个凭证", f"{item.credential_count} credentials")
+            ctk.CTkLabel(
+                row, text=item.model, anchor="w", text_color=TEXT_PRIMARY,
+                font=ctk.CTkFont(family=FONT_MONO, size=12, weight="bold")).grid(
+                    row=0, column=0, sticky="ew", padx=(PAD_SM, PAD_XS))
+            ctk.CTkLabel(
+                row, text=f"{percent:.0f}% · {state}", text_color=color,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).grid(
+                    row=0, column=1, sticky="e", padx=PAD_XS)
+            reset = item.reset_time if item.reset_time and item.reset_time != "N/A" else self._ui("未提供重置时间", "No reset time")
+            ctk.CTkLabel(
+                row, text=f"{credential_text} · {self._ui('重置', 'Reset')} {reset}",
+                anchor="e", text_color=TEXT_MUTED,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).grid(
+                    row=0, column=2, sticky="e", padx=(PAD_XS, PAD_SM))
+            progress = ctk.CTkProgressBar(
+                row, height=6, progress_color=color, fg_color=BORDER)
+            progress.grid(row=1, column=0, columnspan=3, sticky="ew",
+                          padx=PAD_SM, pady=(PAD_XS, PAD_SM))
+            progress.set(percent / 100)
+
+    def _import_gcli_credentials(self):
+        if self._gcli_mode() != MODE_ANTIGRAVITY:
+            messagebox.showwarning(t("notice", self.lang), self._ui(
+                "凭证 JSON 导入只用于 Antigravity，请先切换接入模式。",
+                "Credential JSON import is only available in Antigravity mode."))
+            return
+        if not self._gcli_status.running:
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "请先启动 gcli2api 服务，再导入凭证。",
+                "Start gcli2api before importing credentials."))
+            return
+        paths = filedialog.askopenfilenames(
+            parent=self.root,
+            title=self._ui("选择 Antigravity 凭证 JSON（可多选）",
+                           "Select Antigravity credential JSON files"),
+            filetypes=[("JSON", "*.json")],
+        )
+        if not paths:
+            return
+
+        def done(result, error):
+            self._set_gcli_busy(False)
+            if error or not result:
+                messagebox.showerror(t("error", self.lang), error or self._ui("导入失败", "Import failed"))
+                return
+            detail = result.message
+            if result.errors:
+                detail += "\n\n" + "\n".join(result.errors[:10])
+            (messagebox.showinfo if result.ok else messagebox.showerror)(
+                self._ui("凭证导入", "Credential import"), detail)
+            if result.uploaded_count:
+                self.root.after(50, self._detect_gcli2api)
+
+        self._run_gcli_worker(
+            lambda: self.gcli2api.import_credentials(paths, self._gcli_password(), self._gcli_mode()),
+            done, self._ui("正在导入凭证…", "Importing credentials…"))
+
+    def _refresh_gcli_quotas(self):
+        if self._gcli_mode() != MODE_ANTIGRAVITY:
+            self._render_gcli_quotas(None)
+            return
+        if not self._gcli_status.running:
+            self._render_gcli_quotas(None)
+            return
+
+        def done(snapshot, error):
+            self._set_gcli_busy(False)
+            if error:
+                self.gcli_quota_summary.configure(
+                    text=self._ui(f"额度刷新失败：{error}", f"Quota refresh failed: {error}"),
+                    text_color=DANGER)
+                return
+            self._render_gcli_quotas(snapshot)
+            if snapshot and snapshot.ok:
+                self._configure_gcli_failover()
+
+        self._run_gcli_worker(
+            lambda: self.gcli2api.get_model_quotas(self._gcli_password(), self._gcli_mode()),
+            done, self._ui("正在刷新额度…", "Refreshing quota…"))
+
+    def _configure_gcli_failover(self):
+        """Keep the local Anthropic gateway aligned with the current gcli state."""
+        if self._gcli_mode() != MODE_ANTIGRAVITY:
+            return
+        models = list(self._gcli_status.models)
+        if not models and self._gcli_quota_snapshot and self._gcli_quota_snapshot.ok:
+            models = [item.model for item in self._gcli_quota_snapshot.models]
+        quota = {}
+        if self._gcli_quota_snapshot and self._gcli_quota_snapshot.ok:
+            quota = {
+                item.model: item.remaining_percent
+                for item in self._gcli_quota_snapshot.models
+            }
+        preferred = self.gcli_model_var.get().strip() or (models[0] if models else "")
+        self.gateway.configure_gcli_failover(
+            self.gcli2api.claude_base_url(MODE_ANTIGRAVITY),
+            self._gcli_password(), models, quota, preferred)
 
     def _generate_gcli_password(self):
         if self._gcli_status.running:
@@ -618,12 +905,15 @@ class MainWindow:
                 status = Gcli2ApiStatus(
                     state="error", base_url=self.gcli2api.base_url,
                     install_dir=self.gcli2api.install_dir,
-                    error_code="internal", message=f"检测失败：{error}")
+                    error_code="internal", mode=self._gcli_mode(),
+                    message=f"检测失败：{error}")
             self._gcli_status = status
             self._render_gcli_status(status)
+            if status.ready and status.mode == MODE_ANTIGRAVITY:
+                self.root.after(60, self._refresh_gcli_quotas)
 
         self._run_gcli_worker(
-            lambda: self.gcli2api.detect(self._gcli_password()), done,
+            lambda: self.gcli2api.detect(self._gcli_password(), self._gcli_mode()), done,
             self._ui("正在检测…", "Checking…"))
 
     def _gcli_display_message(self, status: Gcli2ApiStatus) -> str:
@@ -635,11 +925,12 @@ class MainWindow:
             "dns": "Server not found. Check the address, network or DNS.",
             "redirect": "The service redirected the request; stopped to protect the password.",
             "auth_failed": "Wrong or missing API password. API_PASSWORD may differ from the panel password.",
-            "forbidden": "The Google account, project or credential lacks permission.",
+            "forbidden": "The upstream Google credential or product license lacks permission.",
             "not_found": "The API address, endpoint or model does not exist.",
             "rate_limited": "Credential quota is exhausted or rate-limited. Check the panel.",
             "server_error": "gcli2api is temporarily unavailable.",
-            "no_models": "The service is running but has no models. Complete Google OAuth in the panel.",
+            "no_models": ("The service is running but this mode has no models. "
+                          "Complete the matching authentication in the panel."),
             "invalid_json": "The model endpoint returned invalid JSON.",
             "request_error": "Request failed without exposing credentials.",
         }
@@ -668,16 +959,21 @@ class MainWindow:
                 "oauth_required": "● Google OAuth required", "error": "● Check failed",
             },
         }
+        state_name = names.get(self.lang, names["en"]).get(status.state, "○ Waiting")
+        if status.state == "oauth_required" and status.mode == MODE_ANTIGRAVITY:
+            state_name = self._ui("● 需要 AG 凭证", "● AG credential required")
         self.gcli_state_label.configure(
-            text=names.get(self.lang, names["en"]).get(status.state, "○ Waiting"),
+            text=state_name,
             text_color=colors.get(status.state, TEXT_MUTED))
         detail = self._gcli_display_message(status)
         version = f" · {status.version}" if status.version else ""
+        mode_name = self._ui("Antigravity", "Antigravity") if status.mode == MODE_ANTIGRAVITY else self._ui("企业 Gemini CLI", "Enterprise Gemini CLI")
         self.gcli_detail_label.configure(
-            text=f"{status.base_url}{version}\n{detail}\n{status.install_dir}")
+            text=f"{mode_name} · {self.gcli2api.claude_base_url(status.mode)}{version}\n{detail}\n{status.install_dir}")
         if hasattr(self, "gcli_guide_label"):
             self.gcli_guide_label.configure(
-                text=gcli_guide_text(status, bool(self._gcli_password()), self.lang),
+                text=gcli_guide_text(
+                    status, bool(self._gcli_password()), self.lang, self._gcli_mode()),
                 text_color=TEXT_PRIMARY if status.state not in {"error", "auth_required"} else DANGER)
         if status.models:
             values = list(status.models)
@@ -702,6 +998,14 @@ class MainWindow:
         panel_button = getattr(self, "gcli_buttons", {}).get("gcli_panel")
         if panel_button:
             panel_button.configure(state="normal" if status.running else "disabled")
+        import_button = getattr(self, "gcli_buttons", {}).get("gcli_import_credentials")
+        if import_button:
+            import_button.configure(
+                state="normal" if status.running and status.mode == MODE_ANTIGRAVITY else "disabled")
+        quota_button = getattr(self, "gcli_buttons", {}).get("gcli_refresh_quota")
+        if quota_button:
+            quota_button.configure(
+                state="normal" if status.running and status.mode == MODE_ANTIGRAVITY else "disabled")
         for key in ("gcli_add_claude", "gcli_add_gateway"):
             button = getattr(self, "gcli_buttons", {}).get(key)
             if button:
@@ -712,29 +1016,32 @@ class MainWindow:
 
     def _gcli_start_success_message(self, status: Gcli2ApiStatus) -> str:
         if status.ready:
+            provider_name = self.gcli2api.provider_name_for(status.mode)
             return self._ui(
                 f"gcli2api 服务已启动，可以调用。\n\n服务地址：{status.base_url}\n"
                 f"已发现模型：{len(status.models)} 个\n\n下一步：\n"
                 "1. 在“默认模型”中选择模型；\n"
-                "2. 点击“添加到 Claude”；\n"
-                "3. 在下方“API 供应商”找到 Gemini CLI (gcli2api)，点击“测试并使用”；\n"
+                "2. 点击“一键接入 Claude”；\n"
+                f"3. 在下方“API 供应商”找到 {provider_name}，点击“测试并使用”；\n"
                 "4. 选择项目目录，点击“快速启动 Claude”。",
                 f"gcli2api is running and ready.\n\nURL: {status.base_url}\n"
                 f"Models found: {len(status.models)}\n\nNext:\n"
-                "1. Select a Default Model.\n2. Click Add to Claude.\n"
-                "3. Find Gemini CLI (gcli2api) below and click Test & Use.\n"
+                "1. Select a Default Model.\n2. Click Connect to Claude.\n"
+                f"3. Find {provider_name} below and click Test & Use.\n"
                 "4. Choose a project and click Quick Launch Claude.")
+        auth_step = ("选择“Antigravity认证”，并确认“AG凭证”正常"
+                     if status.mode == MODE_ANTIGRAVITY else "完成企业 Gemini CLI OAuth")
         return self._ui(
             f"gcli2api 服务已启动。\n\n服务地址：{status.base_url}\n"
             "目前还没有可用模型，下一步：\n"
             "1. 点击“打开面板”；\n"
             "2. 使用上方同一个本地 API 密码登录；\n"
-            "3. 在面板完成 Google OAuth；\n"
+            f"3. 在面板{auth_step}；\n"
             "4. 回到本软件，点击“检测服务”。",
             f"gcli2api is running.\n\nURL: {status.base_url}\n"
             "No models are available yet. Next:\n1. Click Open Panel.\n"
             "2. Sign in with the same local API password.\n"
-            "3. Complete Google OAuth.\n4. Return here and click Check.")
+            "3. Complete the selected mode authentication.\n4. Return here and click Check.")
 
     def _install_gcli2api(self):
         message = self._ui(
@@ -781,13 +1088,15 @@ class MainWindow:
                 detail = message if self.lang == "zh" else self._gcli_display_message(status)
                 messagebox.showerror(
                     t("error", self.lang),
-                    f"{detail}\n\n{gcli_guide_text(status, bool(password), self.lang)}")
+                    f"{detail}\n\n{gcli_guide_text(status, bool(password), self.lang, self._gcli_mode())}")
                 return
             messagebox.showinfo(
                 self._ui("服务已启动", "Service started"),
                 self._gcli_start_success_message(status))
 
-        self._run_gcli_worker(lambda: self.gcli2api.start_and_wait(password, password), done,
+        self._run_gcli_worker(
+            lambda: self.gcli2api.start_and_wait(
+                password, password, mode=self._gcli_mode()), done,
                               self._ui("正在启动…", "Starting…"))
 
     def _open_gcli2api_panel(self):
@@ -803,23 +1112,52 @@ class MainWindow:
             return
         model = self.gcli_model_var.get().strip() or "gemini-2.5-pro"
         _, fast_model = self.gcli2api.select_models(self._gcli_status.models or (model,))
+        mode = self._gcli_mode()
+        auto_failover = mode == MODE_ANTIGRAVITY
+        if auto_failover:
+            self._configure_gcli_failover()
+            if not self.gateway.gcli_failover.is_configured():
+                messagebox.showerror(t("error", self.lang), self._ui(
+                    "没有可用于自动切换的模型，请先检测服务并刷新额度。",
+                    "No models are available for failover. Check the service and refresh quota."))
+                return
+            gateway_ok, gateway_message = self.gateway.start()
+            if not gateway_ok:
+                messagebox.showerror(t("error", self.lang), gateway_message)
+                return
         existing = next((item for item in self.provider_manager.get_all_providers()
                          if item.get("provider_kind") == "gcli2api"), None)
-        name = existing.get("name") if existing else "Gemini CLI (gcli2api)"
+        old_name = existing.get("name") if existing else ""
+        name = self.gcli2api.provider_name_for(mode)
         ok, message = self.provider_manager.add_or_update_provider(
-            name=name, old_name=name if existing else "", base_url=self.gcli2api.base_url,
+            name=name, old_name=old_name,
+            base_url=(self.gateway.get_base_url() if auto_failover
+                      else self.gcli2api.claude_base_url(mode)),
             model=model, small_fast_model=fast_model, api_key=password,
-            enabled=True, priority=10, auth_mode="bearer", provider_kind="gcli2api")
+            enabled=True, priority=10,
+            auth_mode=("x-api-key" if auto_failover else self.gcli2api.auth_mode_for(mode)),
+            provider_kind="gcli2api")
         if ok:
             self._refresh_provider_list()
             self._append_log(message)
-            message = self._ui(
-                f"{message}\n\n已加入 Claude 供应商列表，但尚未切换。\n"
-                "下一步：在下方“API 供应商”找到 Gemini CLI (gcli2api)，点击“测试并使用”。\n"
-                "测试成功后，再选择项目目录并点击“快速启动 Claude”。",
-                f"{message}\n\nAdded to the Claude provider list, but not selected yet.\n"
-                "Next: find Gemini CLI (gcli2api) below and click Test & Use.\n"
-                "After it passes, choose a project and click Quick Launch Claude.")
+            if auto_failover:
+                message = self._ui(
+                    f"{message}\n\n已加入 Claude 供应商列表，但尚未切换。\n"
+                    f"调用路径：Claude → 本地网关 {self.gateway.get_base_url()} → gcli2api。\n"
+                    "当前模型真实返回 429 时，网关会在输出内容前自动切换，最多尝试 3 个模型。\n"
+                    f"下一步：在下方“API 供应商”找到 {name}，点击“测试并使用”。\n"
+                    "测试成功后，再选择项目目录并点击“快速启动 Claude”。",
+                    f"{message}\n\nAdded to the Claude provider list, but not selected yet.\n"
+                    f"Path: Claude → local gateway {self.gateway.get_base_url()} → gcli2api.\n"
+                    "A real 429 switches models before output, up to 3 distinct models.\n"
+                    f"Next: find {name} below and click Test & Use.\n"
+                    "After it passes, choose a project and click Quick Launch Claude.")
+            else:
+                message = self._ui(
+                    f"{message}\n\n企业模式已按直连方式加入；直连不经过本软件，不能自动切换模型。\n"
+                    f"下一步：在下方“API 供应商”找到 {name}，点击“测试并使用”。",
+                    f"{message}\n\nEnterprise mode was added as a direct connection; direct mode cannot auto-switch models.\n"
+                    f"Next: find {name} below and click Test & Use.")
         (messagebox.showinfo if ok else messagebox.showerror)(t("notice", self.lang), message)
 
     def _add_gcli2api_to_gateway(self):
@@ -829,13 +1167,16 @@ class MainWindow:
                 "请先填写 API 密码", "Enter the API password first"))
             return
         models = list(self._gcli_status.models) or [self.gcli_model_var.get().strip() or "gemini-2.5-pro"]
+        mode = self._gcli_mode()
+        name = self.gcli2api.provider_name_for(mode)
         existing = next((item for item in self.model_manager.get_all_providers()
                          if item.get("provider_type") == "gcli2api"), None)
         if existing:
             ok, message = self.model_manager.update_provider(existing["id"], {
-                "name": existing.get("name") or "Gemini CLI (gcli2api)",
-                "base_url": f"{self.gcli2api.base_url}/v1",
-                "api_key": password, "auth_mode": "bearer", "status": "active",
+                "name": name,
+                "base_url": self.gcli2api.gateway_base_url(mode),
+                "api_key": password, "auth_mode": self.gcli2api.auth_mode_for(mode),
+                "status": "active",
             })
             if ok:
                 known = {item.get("model_name") for item in self.model_manager.get_models_by_provider(existing["id"])}
@@ -844,9 +1185,10 @@ class MainWindow:
                         self.model_manager.add_model(existing["id"], model)
         else:
             ok, message = self.model_manager.add_provider(
-                name="Gemini CLI (gcli2api)", provider_type="gcli2api",
-                base_url=f"{self.gcli2api.base_url}/v1", api_key=password,
-                auth_mode="bearer", models=[{"name": model} for model in models])
+                name=name, provider_type="gcli2api",
+                base_url=self.gcli2api.gateway_base_url(mode), api_key=password,
+                auth_mode=self.gcli2api.auth_mode_for(mode),
+                models=[{"name": model} for model in models])
         if ok:
             self._refresh_models_tab()
             self.gateway_panel._refresh_all()
@@ -856,7 +1198,8 @@ class MainWindow:
     def _show_gcli2api_examples(self):
         GcliExamplesDialog(
             self.root, self.lang,
-            self.gcli2api.generate_examples(self.gcli_model_var.get().strip() or "gemini-2.5-pro"),
+            self.gcli2api.generate_examples(
+                self.gcli_model_var.get().strip() or "gemini-2.5-pro", self._gcli_mode()),
         ).grab_set()
 
     def _build_provider_section(self):
@@ -1523,6 +1866,76 @@ class MainWindow:
             state="disabled")
         self.environment_output.grid(row=5, column=0, columnspan=2, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_LG))
+
+        version_card = ctk.CTkFrame(
+            frame, fg_color=BG_SURFACE, corner_radius=12,
+            border_width=1, border_color=BORDER,
+        )
+        version_card.pack(fill="x", pady=(PAD_LG, 0))
+        version_card.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            version_card, text=self._ui(f"版本  {APP_VERSION_NAME}", f"Version  {APP_VERSION_NAME}"),
+            font=ctk.CTkFont(size=15, weight="bold"), text_color=TEXT_PRIMARY,
+        ).grid(row=0, column=0, sticky="w", padx=PAD_LG, pady=(PAD_LG, PAD_XS))
+        self.update_status_label = ctk.CTkLabel(
+            version_card, text=self._ui("可手动检查 GitHub Release", "Check GitHub Releases manually"),
+            font=ctk.CTkFont(size=11), text_color=TEXT_MUTED, anchor="w",
+        )
+        self.update_status_label.grid(row=1, column=0, sticky="ew", padx=PAD_LG,
+                                      pady=(0, PAD_LG))
+        self.update_button = ctk.CTkButton(
+            version_card, text=self._ui("检查更新", "Check for Updates"), width=104,
+            height=34, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            command=self._check_for_updates,
+        )
+        self.update_button.grid(row=0, column=1, rowspan=2, padx=PAD_LG, pady=PAD_LG)
+
+        link_row = ctk.CTkFrame(version_card, fg_color=BG_ELEVATED, corner_radius=0)
+        link_row.grid(row=2, column=0, columnspan=2, sticky="ew")
+        links = (
+            ("GitHub", REPO_URL),
+            (self._ui("反馈问题", "Report Issue"), FEEDBACK_URL),
+            (self._ui("版本发布", "Releases"), RELEASES_URL),
+            (self._ui("更新日志", "Changelog"), CHANGELOG_URL),
+        )
+        for label, url in links:
+            ctk.CTkButton(
+                link_row, text=label, width=92, height=32, fg_color="transparent",
+                hover_color=BORDER, text_color=ACCENT,
+                command=lambda value=url: webbrowser.open(value),
+            ).pack(side="left", padx=(PAD_SM, 0), pady=PAD_SM)
+
+    def _check_for_updates(self):
+        if self._update_busy:
+            return
+        self._update_busy = True
+        self.update_button.configure(state="disabled")
+        self.update_status_label.configure(
+            text=self._ui("正在检查…", "Checking…"), text_color=INFO)
+
+        def worker():
+            self._update_queue.put(check_for_updates())
+
+        threading.Thread(target=worker, daemon=True, name="app-update-check").start()
+
+    def _poll_update_results(self):
+        try:
+            result = self._update_queue.get_nowait()
+        except queue.Empty:
+            result = None
+        if result is not None:
+            self._update_busy = False
+            self.update_button.configure(state="normal")
+            color = SUCCESS if result.status == "up_to_date" else (
+                ACCENT if result.status == "update_available" else WARNING)
+            self.update_status_label.configure(text=result.message, text_color=color)
+            if result.status == "update_available":
+                if messagebox.askyesno(
+                        self._ui("发现新版本", "Update available"),
+                        self._ui(f"{result.message}，是否打开下载页面？",
+                                 f"{result.message}. Open the download page?")):
+                    webbrowser.open(result.release_url)
+        self.root.after(180, self._poll_update_results)
 
     def _on_theme_change(self, display_name: str):
         mode = self._theme_display_to_mode.get(display_name, "system")

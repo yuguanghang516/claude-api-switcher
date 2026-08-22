@@ -5,7 +5,6 @@
 - 多 Key 自动轮询
 - 自动故障转移
 - 智能模型路由
-- 成本控制
 - Token 价格计算
 - 通知系统
 - 无重启热切换
@@ -21,12 +20,12 @@ from .balance_checker import BalanceChecker, BalanceInfo
 from .key_rotator import MultiKeyRotator
 from .failover import FailoverEngine, FailoverTarget, FailoverExhausted
 from .smart_router import SmartRouter, ModelCapability
-from .cost_controller import CostController
 from .pricing import PricingCalculator
 from .notifier import Notifier, Notification, NotificationType, NotificationPriority
 from .v2_config import V2ConfigManager
 from .hot_reload import ConfigHotSwapper
 from .gateway_server import SUPPORTED_PROVIDERS
+from .client_source import classify_client_source
 
 
 class GatewayServerV2:
@@ -63,14 +62,6 @@ class GatewayServerV2:
             default_task_type=self.v2_config.get_default_task_type(),
             logger=logger,
         )
-        self.cost_controller = CostController(
-            daily_limit=self.v2_config.get_daily_limit(),
-            monthly_limit=self.v2_config.get_monthly_limit(),
-            warning_threshold=self.v2_config.get_budget().get("warning_threshold", 0.8),
-            auto_switch_cheap=self.v2_config.get_budget().get("auto_switch_cheap", True),
-            currency=self.v2_config.get_budget().get("currency", "USD"),
-            logger=logger,
-        )
         self.pricing = PricingCalculator()
         self.notifier = Notifier(
             desktop_enabled=self.v2_config.get_notifications().get("desktop_enabled", True),
@@ -92,30 +83,8 @@ class GatewayServerV2:
 
     def _setup_callbacks(self):
         """设置回调函数"""
-        # 预算警告
-        self.cost_controller.on_warning(self._on_budget_warning)
-        self.cost_controller.on_exceeded(self._on_budget_exceeded)
-
         # 配置热切换
         self.hot_swapper.register_handler("v2_config", self._on_config_changed)
-
-    def _on_budget_warning(self, event_type, data):
-        """预算警告回调"""
-        self.notifier.notify_budget_warning(
-            data.get("daily_percent", 0),
-            data.get("monthly_percent", 0),
-            data.get("currency", "USD"),
-        )
-
-    def _on_budget_exceeded(self, event_type, data):
-        """预算超限回调"""
-        self.notifier.notify_budget_exceeded(
-            data.get("daily_used", 0),
-            data.get("daily_limit", 0),
-            data.get("monthly_used", 0),
-            data.get("monthly_limit", 0),
-            data.get("currency", "USD"),
-        )
 
     def _on_config_changed(self, path):
         """配置变更回调"""
@@ -126,13 +95,6 @@ class GatewayServerV2:
 
     def _reload_config(self):
         """重新加载配置"""
-        # 更新成本控制
-        budget = self.v2_config.get_budget()
-        self.cost_controller.daily_limit = budget.get("daily_limit_usd", 5.0)
-        self.cost_controller.monthly_limit = budget.get("monthly_limit_usd", 100.0)
-        self.cost_controller.warning_threshold = budget.get("warning_threshold", 0.8)
-        self.cost_controller.auto_switch_cheap = budget.get("auto_switch_cheap", True)
-
         # 更新轮询策略
         self.key_rotator.set_strategy(self.v2_config.get_rotation_strategy())
 
@@ -167,7 +129,6 @@ class GatewayServerV2:
         self.app.add_url_rule("/v2/balance", view_func=self._get_balance, methods=["GET"])
         self.app.add_url_rule("/v2/balance/refresh", view_func=self._refresh_balance, methods=["POST"])
         self.app.add_url_rule("/v2/status", view_func=self._get_status, methods=["GET"])
-        self.app.add_url_rule("/v2/cost", view_func=self._get_cost, methods=["GET"])
         self.app.add_url_rule("/v2/routing/info", view_func=self._get_routing_info, methods=["POST"])
         self.app.add_url_rule("/v2/config", view_func=self._get_config, methods=["GET"])
         self.app.add_url_rule("/v2/config", view_func=self._update_config, methods=["PUT"])
@@ -272,7 +233,6 @@ class GatewayServerV2:
                 "key_rotation",
                 "failover",
                 "smart_routing",
-                "cost_control",
                 "pricing",
                 "notifications",
                 "hot_reload",
@@ -315,15 +275,6 @@ class GatewayServerV2:
 
         if not messages:
             return jsonify({"error": {"message": "消息列表为空", "type": "invalid_request_error"}}), 400
-
-        # 检查预算
-        if self.cost_controller.should_switch_to_cheap():
-            # 预算超限，强制使用最便宜模型
-            cheapest = self.smart_router.get_cheapest_model()
-            if cheapest:
-                model_name = cheapest.model_name
-                if self.logger:
-                    self.logger.info(f"预算超限，自动切换至低成本模型: {model_name}")
 
         # 智能路由选择模型
         if self.v2_config.is_routing_enabled() and not model_name:
@@ -404,10 +355,6 @@ class GatewayServerV2:
                 completion_tokens = usage.get("completion_tokens", 0)
             total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
 
-            # 计算费用
-            cost = self.pricing.calculate_cost(model_name, prompt_tokens, completion_tokens)
-            self.cost_controller.record_cost(cost.total_cost_usd, model_name)
-
             # 记录 Key 使用成功
             self.key_rotator.report_success(provider_id, api_key)
 
@@ -437,10 +384,6 @@ class GatewayServerV2:
                         "completion_tokens": completion_tokens,
                         "total_tokens": total_tokens,
                     },
-                    "cost": {
-                        "usd": round(cost.total_cost_usd, 6),
-                        "cny": round(cost.total_cost_cny, 6),
-                    },
                 }
             else:
                 response_data = {
@@ -453,10 +396,6 @@ class GatewayServerV2:
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "total_tokens": total_tokens,
-                    },
-                    "cost": {
-                        "usd": round(cost.total_cost_usd, 6),
-                        "cny": round(cost.total_cost_cny, 6),
                     },
                 }
 
@@ -568,6 +507,7 @@ class GatewayServerV2:
                 "response_time_ms": response_time_ms,
                 "status": status,
                 "error": error[:500] if error else "",
+                "client_source": classify_client_source(request.headers),
             })
         if self.logger and status == "error":
             self.logger.error(f"Gateway [{model}] {status}: {error}")
@@ -611,32 +551,6 @@ class GatewayServerV2:
             "key_rotation_enabled": self.v2_config.is_key_rotation_enabled(),
             "hot_reload": self.hot_swapper.is_running(),
             "uptime": int(time.time()),
-        })
-
-    def _get_cost(self):
-        """获取费用统计"""
-        status = self.cost_controller.get_status()
-        daily_by_model = self.cost_controller.get_daily_usage_by_model()
-        monthly_by_model = self.cost_controller.get_monthly_usage_by_model()
-
-        return jsonify({
-            "daily": {
-                "limit": status.daily_limit,
-                "used": status.daily_used,
-                "remaining": status.daily_remaining,
-                "percent": status.daily_percent,
-                "by_model": daily_by_model,
-            },
-            "monthly": {
-                "limit": status.monthly_limit,
-                "used": status.monthly_used,
-                "remaining": status.monthly_remaining,
-                "percent": status.monthly_percent,
-                "by_model": monthly_by_model,
-            },
-            "currency": status.currency,
-            "warning_triggered": status.warning_triggered,
-            "budget_exceeded": status.budget_exceeded,
         })
 
     def _get_routing_info(self):

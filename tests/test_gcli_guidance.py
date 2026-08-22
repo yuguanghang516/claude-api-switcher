@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from app.gcli2api_manager import Gcli2ApiStatus
-from app.gui import gcli_guide_text
+from app.gcli2api_manager import Gcli2ApiStatus, MODE_ANTIGRAVITY, MODE_GEMINI_CLI
+from app.gui import MainWindow, gcli_guide_text
 
 
 def _status(state, *, installed=True, running=False, ready=False, message=""):
@@ -20,7 +20,7 @@ def _status(state, *, installed=True, running=False, ready=False, message=""):
         (_status("stopped"), False, "自己设置"),
         (_status("stopped"), True, "启动服务"),
         (_status("auth_required", running=True), True, "API_PASSWORD"),
-        (_status("oauth_required", running=True), True, "Google OAuth"),
+        (_status("oauth_required", running=True), True, "Antigravity"),
         (_status("ready", running=True, ready=True), True, "测试并使用"),
         (_status("error", message="端口异常"), True, "端口异常"),
     ],
@@ -33,3 +33,43 @@ def test_english_password_guidance_explains_source():
     text = gcli_guide_text(_status("stopped"), False, "en")
     assert "choose your own password" in text.lower()
     assert "Generate & Copy" in text
+
+
+def test_saved_claude_gcli_connection_restores_password_and_mode():
+    window = MainWindow.__new__(MainWindow)
+
+    class Providers:
+        def get_all_providers(self):
+            return [{"name": "Gemini", "provider_kind": "gcli2api"}]
+
+        def get_provider_detail(self, _name):
+            return {
+                "base_url": "http://127.0.0.1:7861/antigravity",
+                "api_key": "saved-password", "model": "gemini-pro",
+            }
+
+    window.provider_manager = Providers()
+    window.model_manager = type("Models", (), {"get_all_providers": lambda self: []})()
+    assert window._saved_gcli_connection() == (
+        "saved-password", MODE_ANTIGRAVITY, "gemini-pro")
+
+
+def test_saved_gateway_gcli_connection_is_used_as_fallback():
+    window = MainWindow.__new__(MainWindow)
+    window.provider_manager = type(
+        "Providers", (), {"get_all_providers": lambda self: []})()
+
+    class Models:
+        def get_all_providers(self):
+            return [{
+                "id": "gcli", "provider_type": "gcli2api",
+                "name": "Gemini CLI Enterprise (gcli2api)",
+                "base_url": "http://127.0.0.1:7861/v1", "api_key": "gateway-password",
+            }]
+
+        def get_models_by_provider(self, _provider_id):
+            return [{"model_name": "gemini-enterprise"}]
+
+    window.model_manager = Models()
+    assert window._saved_gcli_connection() == (
+        "gateway-password", MODE_GEMINI_CLI, "gemini-enterprise")

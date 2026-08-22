@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import subprocess
@@ -11,7 +12,7 @@ import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -24,6 +25,12 @@ WINGET_PACKAGES: Tuple[Tuple[str, str], ...] = (
 )
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 PLACEHOLDER_PASSWORD = "YOUR_GCLI2API_PASSWORD"
+MODE_ANTIGRAVITY = "antigravity"
+MODE_GEMINI_CLI = "geminicli"
+SUPPORTED_MODES = (MODE_ANTIGRAVITY, MODE_GEMINI_CLI)
+MAX_IMPORT_FILES = 20
+MAX_IMPORT_FILE_BYTES = 2 * 1024 * 1024
+MAX_IMPORT_TOTAL_BYTES = 10 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -40,6 +47,34 @@ class Gcli2ApiStatus:
     models: Tuple[str, ...] = ()
     error_code: str = ""
     message: str = ""
+    mode: str = MODE_ANTIGRAVITY
+
+
+@dataclass(frozen=True)
+class GcliCredentialImportResult:
+    ok: bool
+    uploaded_count: int = 0
+    total_count: int = 0
+    message: str = ""
+    errors: Tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class GcliModelQuota:
+    model: str
+    remaining_percent: float
+    reset_time: str = ""
+    reset_time_raw: str = ""
+    credential_count: int = 1
+
+
+@dataclass(frozen=True)
+class GcliQuotaSnapshot:
+    ok: bool
+    models: Tuple[GcliModelQuota, ...] = ()
+    credential_count: int = 0
+    message: str = ""
+    fetched_at: int = 0
 
 
 class Gcli2ApiManager:
@@ -83,7 +118,33 @@ class Gcli2ApiManager:
 
     @property
     def models_url(self) -> str:
-        return f"{self.base_url}/v1/models"
+        return self.models_url_for(MODE_GEMINI_CLI)
+
+    @staticmethod
+    def normalize_mode(mode: str) -> str:
+        return mode if mode in SUPPORTED_MODES else MODE_ANTIGRAVITY
+
+    def models_url_for(self, mode: str) -> str:
+        mode = self.normalize_mode(mode)
+        prefix = "/antigravity" if mode == MODE_ANTIGRAVITY else ""
+        return f"{self.base_url}{prefix}/v1/models"
+
+    def claude_base_url(self, mode: str) -> str:
+        return (f"{self.base_url}/antigravity"
+                if self.normalize_mode(mode) == MODE_ANTIGRAVITY else self.base_url)
+
+    def gateway_base_url(self, mode: str) -> str:
+        return f"{self.claude_base_url(mode)}/v1"
+
+    @classmethod
+    def auth_mode_for(cls, mode: str) -> str:
+        return "x-api-key" if cls.normalize_mode(mode) == MODE_ANTIGRAVITY else "bearer"
+
+    @classmethod
+    def provider_name_for(cls, mode: str) -> str:
+        return ("Gemini Antigravity (gcli2api)"
+                if cls.normalize_mode(mode) == MODE_ANTIGRAVITY
+                else "Gemini CLI Enterprise (gcli2api)")
 
     @property
     def is_local(self) -> bool:
@@ -299,6 +360,16 @@ class Gcli2ApiManager:
                     names.append(name)
         return tuple(names)
 
+    @staticmethod
+    def is_claude_text_model(model: str) -> bool:
+        """Hide gcli2api internal/image/agent entries from Claude-facing choices."""
+        name = str(model or "").strip().lower()
+        if not name:
+            return False
+        if any(marker in name for marker in ("image", "tab_", "chat_", "-agent", "_agent")):
+            return False
+        return any(family in name for family in ("gemini", "claude", "gpt-oss"))
+
     def _status(self, **changes) -> Gcli2ApiStatus:
         base = {
             "base_url": self.base_url,
@@ -309,9 +380,216 @@ class Gcli2ApiManager:
         base.update(changes)
         return Gcli2ApiStatus(**base)
 
-    def detect(self, api_password: str = "") -> Gcli2ApiStatus:
+    @staticmethod
+    def _safe_response_detail(response: requests.Response) -> str:
+        """Return a bounded server error without echoing credential payloads."""
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        detail = payload.get("detail") or payload.get("error") or payload.get("message") or ""
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("type") or ""
+        text = str(detail).replace("\r", " ").replace("\n", " ").strip()
+        sensitive_markers = ("access_token", "refresh_token", "authorization", "bearer ", "token=")
+        if any(marker in text.lower() for marker in sensitive_markers):
+            return "服务返回了包含敏感字段的错误，内容已隐藏"
+        return text[:180]
+
+    def import_credentials(self, paths: Sequence[Path | str], panel_password: str,
+                           mode: str = MODE_ANTIGRAVITY) -> GcliCredentialImportResult:
+        """Validate and upload credential JSON files through gcli2api's panel API."""
+        mode = self.normalize_mode(mode)
+        if mode != MODE_ANTIGRAVITY:
+            return GcliCredentialImportResult(False, message="凭证导入仅支持 Antigravity 模式")
+        if not panel_password:
+            return GcliCredentialImportResult(False, message="请先填写本地 API 密码")
+        selected = tuple(Path(path) for path in paths)
+        if not selected:
+            return GcliCredentialImportResult(False, message="没有选择 JSON 文件")
+        if len(selected) > MAX_IMPORT_FILES:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message=f"一次最多导入 {MAX_IMPORT_FILES} 个 JSON 文件")
+
+        files = []
+        errors: List[str] = []
+        total_bytes = 0
+        for path in selected:
+            safe_name = path.name
+            if path.suffix.lower() != ".json":
+                errors.append(f"{safe_name}：只支持 .json 文件")
+                continue
+            try:
+                size = path.stat().st_size
+            except OSError:
+                errors.append(f"{safe_name}：无法读取文件")
+                continue
+            if size <= 0:
+                errors.append(f"{safe_name}：文件为空")
+                continue
+            if size > MAX_IMPORT_FILE_BYTES:
+                errors.append(f"{safe_name}：超过 2 MiB")
+                continue
+            total_bytes += size
+            if total_bytes > MAX_IMPORT_TOTAL_BYTES:
+                errors.append("所选文件总大小超过 10 MiB")
+                break
+            try:
+                content = path.read_bytes()
+                payload = json.loads(content.decode("utf-8-sig"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                errors.append(f"{safe_name}：不是有效的 UTF-8 JSON")
+                continue
+            if not isinstance(payload, dict):
+                errors.append(f"{safe_name}：JSON 顶层必须是对象")
+                continue
+            files.append(("files", (safe_name, content, "application/json")))
+
+        if errors or not files:
+            message = "导入前检查未通过" if errors else "没有可导入的 JSON 文件"
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message=message, errors=tuple(errors))
+
+        headers = {"Authorization": f"Bearer {panel_password}", "Accept": "application/json"}
+        try:
+            response = requests.post(
+                f"{self.base_url}/creds/upload", headers=headers,
+                params={"mode": MODE_ANTIGRAVITY}, files=files,
+                timeout=max(self.request_timeout, 60), allow_redirects=False,
+            )
+        except requests.exceptions.Timeout:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="凭证导入超时；请检查服务和文件大小")
+        except requests.exceptions.ConnectionError:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="无法连接 gcli2api；请先启动服务")
+        except requests.exceptions.RequestException:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="凭证导入请求失败；敏感内容未记录")
+
+        if 300 <= response.status_code < 400:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="服务返回重定向；为保护凭证已停止")
+        if response.status_code in {401, 403}:
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="面板密码不匹配；请填写服务启动时的 PANEL_PASSWORD")
+        if response.status_code != 200:
+            detail = self._safe_response_detail(response)
+            suffix = f"：{detail}" if detail else ""
+            return GcliCredentialImportResult(
+                False, total_count=len(selected),
+                message=f"gcli2api 拒绝导入（HTTP {response.status_code}）{suffix}")
+        try:
+            payload = response.json()
+            uploaded = int(payload.get("uploaded_count", 0)) if isinstance(payload, dict) else 0
+            results = payload.get("results", []) if isinstance(payload, dict) else []
+        except (ValueError, TypeError):
+            return GcliCredentialImportResult(
+                False, total_count=len(selected), message="导入接口返回了无效数据")
+        result_errors = tuple(
+            f"{str(item.get('filename') or '文件')}：{str(item.get('message') or '处理失败')[:120]}"
+            for item in results
+            if isinstance(item, dict) and item.get("status") != "success"
+        )
+        ok = uploaded > 0 and not result_errors
+        return GcliCredentialImportResult(
+            ok, uploaded_count=uploaded, total_count=len(selected),
+            message=f"已导入 {uploaded}/{len(selected)} 个 Antigravity 凭证",
+            errors=result_errors,
+        )
+
+    def get_model_quotas(self, panel_password: str,
+                         mode: str = MODE_ANTIGRAVITY) -> GcliQuotaSnapshot:
+        """Read per-model quota snapshots without treating them as live availability."""
+        mode = self.normalize_mode(mode)
+        now = int(time.time())
+        if mode != MODE_ANTIGRAVITY:
+            return GcliQuotaSnapshot(False, message="逐模型额度仅支持 Antigravity 模式", fetched_at=now)
+        if not panel_password:
+            return GcliQuotaSnapshot(False, message="请先填写本地 API 密码", fetched_at=now)
+        headers = {"Authorization": f"Bearer {panel_password}", "Accept": "application/json"}
+        try:
+            status_response = requests.get(
+                f"{self.base_url}/creds/status", headers=headers,
+                params={"offset": 0, "limit": 100, "status_filter": "enabled", "mode": mode},
+                timeout=max(self.request_timeout, 15), allow_redirects=False,
+            )
+            if status_response.status_code in {401, 403}:
+                return GcliQuotaSnapshot(False, message="面板密码不匹配", fetched_at=now)
+            if status_response.status_code != 200:
+                return GcliQuotaSnapshot(
+                    False, message=f"凭证列表返回 HTTP {status_response.status_code}", fetched_at=now)
+            payload = status_response.json()
+            items = payload.get("items", []) if isinstance(payload, dict) else []
+            filenames = [
+                str(item.get("filename") or "") for item in items
+                if isinstance(item, dict) and not item.get("disabled")
+                and str(item.get("filename") or "").lower().endswith(".json")
+            ]
+            aggregate: Dict[str, Dict[str, object]] = {}
+            for filename in filenames[:100]:
+                quota_response = requests.get(
+                    f"{self.base_url}/creds/quota/{quote(filename, safe='')}",
+                    headers=headers, params={"mode": mode},
+                    timeout=max(self.request_timeout, 30), allow_redirects=False,
+                )
+                if quota_response.status_code != 200:
+                    continue
+                quota_payload = quota_response.json()
+                models = quota_payload.get("models", {}) if isinstance(quota_payload, dict) else {}
+                if not isinstance(models, dict):
+                    continue
+                for model, info in models.items():
+                    if not isinstance(info, dict) or not str(model).strip():
+                        continue
+                    try:
+                        remaining = max(0.0, min(1.0, float(info.get("remaining"))))
+                    except (TypeError, ValueError):
+                        continue
+                    entry = aggregate.setdefault(str(model), {
+                        "remaining": remaining, "reset": "", "reset_raw": "", "count": 0,
+                    })
+                    entry["count"] = int(entry["count"]) + 1
+                    if remaining >= float(entry["remaining"]):
+                        entry["remaining"] = remaining
+                        entry["reset"] = str(info.get("resetTime") or "")
+                        entry["reset_raw"] = str(info.get("resetTimeRaw") or "")
+        except requests.exceptions.Timeout:
+            return GcliQuotaSnapshot(False, message="额度查询超时", fetched_at=now)
+        except requests.exceptions.ConnectionError:
+            return GcliQuotaSnapshot(False, message="无法连接 gcli2api；请先启动服务", fetched_at=now)
+        except (requests.exceptions.RequestException, ValueError, TypeError):
+            return GcliQuotaSnapshot(False, message="无法读取额度数据", fetched_at=now)
+
+        models = tuple(sorted((
+            GcliModelQuota(
+                model=model, remaining_percent=float(info["remaining"]) * 100,
+                reset_time=str(info["reset"]), reset_time_raw=str(info["reset_raw"]),
+                credential_count=int(info["count"]),
+            ) for model, info in aggregate.items()
+        ), key=lambda item: (-item.remaining_percent, item.model.lower())))
+        if not models:
+            return GcliQuotaSnapshot(
+                False, credential_count=len(filenames), message="没有可用的 Antigravity 额度数据",
+                fetched_at=now)
+        return GcliQuotaSnapshot(
+            True, models=models, credential_count=len(filenames),
+            message=f"{len(filenames)} 个凭证 · {len(models)} 个模型", fetched_at=now)
+
+    def _antigravity_quota_models(self, api_password: str) -> Tuple[str, ...]:
+        """Use gcli2api's authenticated quota API when its model-list call is empty."""
+        snapshot = self.get_model_quotas(api_password, MODE_ANTIGRAVITY)
+        return tuple(
+            item.model for item in snapshot.models
+            if self.is_claude_text_model(item.model)
+        ) if snapshot.ok else ()
+
+    def detect(self, api_password: str = "", mode: str = MODE_ANTIGRAVITY) -> Gcli2ApiStatus:
         """Probe the service without following credential-bearing redirects."""
 
+        mode = self.normalize_mode(mode)
         if self.is_local:
             self.refresh_install_dir()
         headers = {"Accept": "application/json"}
@@ -319,43 +597,65 @@ class Gcli2ApiManager:
             headers["Authorization"] = f"Bearer {api_password}"
         try:
             response = requests.get(
-                self.models_url, headers=headers, timeout=self.request_timeout,
+                self.models_url_for(mode), headers=headers, timeout=self.request_timeout,
                 allow_redirects=False,
             )
         except requests.exceptions.Timeout:
-            return self._status(state="error", error_code="timeout", message="连接超时；请检查代理、防火墙和服务日志")
+            return self._status(state="error", error_code="timeout", mode=mode,
+                                message="连接超时；请检查代理、防火墙和服务日志")
         except requests.exceptions.ConnectionError as exc:
             detail = str(exc).lower()
             if any(marker in detail for marker in ("getaddrinfo", "name resolution", "enotfound")):
-                return self._status(state="error", error_code="dns", message="找不到服务器；请检查地址、网络或 DNS")
+                return self._status(state="error", error_code="dns", mode=mode,
+                                    message="找不到服务器；请检查地址、网络或 DNS")
             if (self.install_dir / "web.py").is_file() and self.is_local:
-                return self._status(state="stopped", error_code="connection_refused", message="gcli2api 已安装，但服务未启动")
-            return self._status(state="not_installed", error_code="connection_refused", message="未检测到 gcli2api 服务")
+                return self._status(state="stopped", error_code="connection_refused", mode=mode,
+                                    message="gcli2api 已安装，但服务未启动")
+            return self._status(state="not_installed", error_code="connection_refused", mode=mode,
+                                message="未检测到 gcli2api 服务")
         except requests.exceptions.RequestException:
-            return self._status(state="error", error_code="request_error", message="请求异常；凭据未泄露")
+            return self._status(state="error", error_code="request_error", mode=mode,
+                                message="请求异常；凭据未泄露")
 
         status = response.status_code
         if 300 <= status < 400:
-            return self._status(state="error", running=True, error_code="redirect", message="服务返回重定向；为保护密码已停止")
+            return self._status(state="error", running=True, error_code="redirect", mode=mode,
+                                message="服务返回重定向；为保护密码已停止")
         if status == 401:
-            return self._status(state="auth_required", running=True, error_code="auth_failed", message="API 密码错误或尚未填写；API_PASSWORD 与面板密码可以不同")
+            return self._status(state="auth_required", running=True, error_code="auth_failed", mode=mode,
+                                message="本地 API 密码错误或尚未填写；请填写服务启动时的 API_PASSWORD")
         if status == 403:
-            return self._status(state="error", running=True, error_code="forbidden", message="Google 账号、项目或凭据无权限")
+            # gcli2api 的模型列表端点在本地 API_PASSWORD 不匹配时返回 403。
+            # Google 上游的 403 只会在实际消息请求阶段出现。
+            return self._status(state="auth_required", running=True, error_code="auth_failed", mode=mode,
+                                message="本地 API 密码不匹配；请填写服务启动时的 API_PASSWORD")
         if status == 404:
-            return self._status(state="error", running=True, error_code="not_found", message="API 地址或 /v1/models 端点不存在")
+            endpoint = "/antigravity/v1/models" if mode == MODE_ANTIGRAVITY else "/v1/models"
+            return self._status(state="error", running=True, error_code="not_found", mode=mode,
+                                message=f"当前 gcli2api 不支持 {endpoint}；请更新 gcli2api")
         if status == 429:
-            return self._status(state="error", running=True, error_code="rate_limited", message="凭据额度不足或请求受限；请到管理面板检查凭据")
+            return self._status(state="error", running=True, error_code="rate_limited", mode=mode,
+                                message="凭据额度不足或请求受限；请到管理面板检查凭据")
         if status >= 500:
-            return self._status(state="error", running=True, error_code="server_error", message=f"gcli2api 服务暂时不可用（HTTP {status}）")
+            return self._status(state="error", running=True, error_code="server_error", mode=mode,
+                                message=f"gcli2api 服务暂时不可用（HTTP {status}）")
         if status != 200:
-            return self._status(state="error", running=True, error_code="http_error", message=f"检测失败（HTTP {status}）")
+            return self._status(state="error", running=True, error_code="http_error", mode=mode,
+                                message=f"检测失败（HTTP {status}）")
         try:
             models = self._extract_models(response.json())
         except ValueError:
-            return self._status(state="error", running=True, error_code="invalid_json", message="模型接口返回了无效 JSON")
+            return self._status(state="error", running=True, error_code="invalid_json", mode=mode,
+                                message="模型接口返回了无效 JSON")
+        if mode == MODE_ANTIGRAVITY:
+            models = tuple(model for model in models if self.is_claude_text_model(model))
+        if not models and mode == MODE_ANTIGRAVITY:
+            models = self._antigravity_quota_models(api_password)
         if not models:
-            return self._status(state="oauth_required", running=True, error_code="no_models", message="服务已运行，但没有可用模型；请在面板完成 Google OAuth")
-        return self._status(state="ready", running=True, ready=True, models=models,
+            auth_name = "Antigravity认证并确认 AG 凭证正常" if mode == MODE_ANTIGRAVITY else "企业 Gemini CLI OAuth"
+            return self._status(state="oauth_required", running=True, error_code="no_models", mode=mode,
+                                message=f"服务已运行，但当前模式没有可用模型；请在面板完成{auth_name}")
+        return self._status(state="ready", running=True, ready=True, models=models, mode=mode,
                             message=f"可以调用 · {len(models)} 个模型")
 
     @staticmethod
@@ -402,6 +702,7 @@ class Gcli2ApiManager:
         return True, f"gcli2api 正在启动（PID {process.pid}）"
 
     def start_and_wait(self, api_password: str = "", panel_password: str = "",
+                       mode: str = MODE_ANTIGRAVITY,
                        timeout: float = 15.0, poll_interval: float = 0.4
                        ) -> Tuple[bool, str, Gcli2ApiStatus]:
         """Start a local service and wait until its HTTP endpoint is observable.
@@ -411,7 +712,8 @@ class Gcli2ApiManager:
         instance or a misleading success message.
         """
 
-        status = self.detect(api_password)
+        mode = self.normalize_mode(mode)
+        status = self.detect(api_password, mode)
         if status.running:
             if status.ready:
                 return True, "gcli2api 服务已经启动并可以调用", status
@@ -431,7 +733,7 @@ class Gcli2ApiManager:
         deadline = time.monotonic() + max(0.0, timeout)
         last_status = status
         while True:
-            last_status = self.detect(api_password)
+            last_status = self.detect(api_password, mode)
             if last_status.running:
                 if last_status.ready:
                     return True, "gcli2api 服务已启动并可以调用", last_status
@@ -489,13 +791,17 @@ class Gcli2ApiManager:
     def open_panel(self) -> bool:
         return bool(webbrowser.open(self.base_url))
 
-    def generate_examples(self, model: str = "gemini-2.5-pro") -> Dict[str, str]:
-        base = self.base_url
-        openai_base = f"{base}/v1"
+    def generate_examples(self, model: str = "gemini-2.5-pro",
+                          mode: str = MODE_ANTIGRAVITY) -> Dict[str, str]:
+        mode = self.normalize_mode(mode)
+        base = self.claude_base_url(mode)
+        openai_base = self.gateway_base_url(mode)
+        credential_env = ("ANTHROPIC_API_KEY" if self.auth_mode_for(mode) == "x-api-key"
+                          else "ANTHROPIC_AUTH_TOKEN")
         return {
             "anthropic": (
                 f'$env:ANTHROPIC_BASE_URL="{base}"\n'
-                f'$env:ANTHROPIC_AUTH_TOKEN="{PLACEHOLDER_PASSWORD}"\n'
+                f'$env:{credential_env}="{PLACEHOLDER_PASSWORD}"\n'
                 f'$env:ANTHROPIC_MODEL="{model}"\nclaude'
             ),
             "openai": (

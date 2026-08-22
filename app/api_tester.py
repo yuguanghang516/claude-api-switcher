@@ -1,4 +1,5 @@
 """安全、最小化的 Anthropic 兼容 API 连通性测试。"""
+import re
 import time
 from urllib.parse import urlparse
 from typing import Tuple
@@ -13,11 +14,41 @@ class ApiTester:
     """每次测试只发送一个最小请求，不跟随重定向。"""
 
     @staticmethod
+    def _gcli_rate_limit_message(response) -> str:
+        """Translate gcli2api's bounded quota error into an actionable message."""
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            payload = {}
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        if isinstance(error, dict):
+            detail = str(error.get("message") or "")
+            status = str(error.get("status") or "")
+        else:
+            detail = str(error)
+            status = ""
+        normalized = f"{status} {detail}".lower()
+        exhausted = any(marker in normalized for marker in (
+            "resource_exhausted", "exhausted your capacity", "quota", "capacity",
+        ))
+        match = re.search(
+            r"(?:reset(?:s)?(?:\s+after|\s+in)?|恢复|重置)[^0-9]{0,12}"
+            r"(?P<value>\d+\s*(?:d|h|m|s|天|小时|分钟|秒)(?:\s*\d+\s*(?:h|m|s|小时|分钟|秒))*)",
+            detail, re.IGNORECASE,
+        )
+        reset = re.sub(r"\s+", "", match.group("value")) if match else ""
+        if exhausted:
+            suffix = f"；Google 提示约 {reset} 后恢复" if reset else ""
+            return f"失败 · 当前模型额度已用完{suffix}；请刷新额度或切换其他模型"
+        return "失败 · 429 当前请求受限；请稍后重试或切换模型"
+
+    @staticmethod
     def test_provider(
         base_url: str,
         api_key: str,
         model: str,
         auth_mode: str = "bearer",
+        provider_kind: str = "custom",
     ) -> Tuple[bool, str, int]:
         if not base_url:
             return False, "未设置 API Base URL / API Base URL not set", 0
@@ -68,10 +99,32 @@ class ApiTester:
             if status == 401:
                 return False, "失败 · 401 认证失败（检查 API Key 或认证方式）", elapsed_ms
             if status == 403:
+                if provider_kind == "gcli2api":
+                    try:
+                        detail = str(response.json()).lower()
+                    except (ValueError, TypeError):
+                        detail = response.text.lower()
+                    if any(marker in detail for marker in (
+                            "subscription_required", "#3501", "valid license")):
+                        return False, (
+                            "失败 · Google 通道需要许可证；个人用户请在 Gemini 反代页"
+                            "切换为 Antigravity 后重新一键接入"
+                        ), elapsed_ms
+                    if any(marker in detail for marker in (
+                            "密码错误", "invalid password", "api password")):
+                        return False, (
+                            "失败 · 本地 API 密码不匹配；请在 Gemini 反代页填写"
+                            "服务启动时使用的 API_PASSWORD"
+                        ), elapsed_ms
+                    return False, (
+                        "失败 · Google 凭证无权限；请打开 gcli2api 面板检查当前模式的登录状态"
+                    ), elapsed_ms
                 return False, "失败 · 403 无权限", elapsed_ms
             if status == 404:
                 return False, "失败 · 404 API 地址或模型不存在", elapsed_ms
             if status == 429:
+                if provider_kind == "gcli2api":
+                    return False, ApiTester._gcli_rate_limit_message(response), elapsed_ms
                 return False, "失败 · 429 请求过于频繁或额度不足", elapsed_ms
             if status >= 500:
                 return False, f"失败 · {status} 服务暂时不可用", elapsed_ms

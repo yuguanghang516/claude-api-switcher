@@ -87,9 +87,17 @@ class DatabaseManager:
                 response_time_ms INTEGER DEFAULT 0,
                 status TEXT DEFAULT 'success',
                 error TEXT DEFAULT '',
-                endpoint TEXT DEFAULT '/v1/chat/completions'
+                endpoint TEXT DEFAULT '/v1/chat/completions',
+                client_source TEXT DEFAULT 'legacy_unknown'
             )
         """)
+        log_columns = {
+            row[1] for row in cursor.execute("PRAGMA table_info(request_logs)").fetchall()
+        }
+        if "client_source" not in log_columns:
+            cursor.execute(
+                "ALTER TABLE request_logs ADD COLUMN client_source TEXT DEFAULT 'legacy_unknown'"
+            )
 
         # Token 统计表（按天聚合）
         cursor.execute("""
@@ -113,6 +121,7 @@ class DatabaseManager:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_model ON request_logs(model)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_status ON request_logs(status)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_provider ON request_logs(provider)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_client_source ON request_logs(client_source)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_stats_date ON token_stats(stat_date)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_models_provider ON models(provider_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_models_status ON models(status)")
@@ -334,8 +343,8 @@ class DatabaseManager:
                 conn.execute("""
                     INSERT INTO request_logs (request_time, model, provider, input_tokens,
                                             output_tokens, total_tokens, response_time_ms,
-                                            status, error, endpoint)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                            status, error, endpoint, client_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     now,
                     log.get("model", ""),
@@ -347,6 +356,7 @@ class DatabaseManager:
                     log.get("status", "success"),
                     log.get("error", ""),
                     log.get("endpoint", "/v1/chat/completions"),
+                    log.get("client_source", "other"),
                 ))
 
                 # 更新统计
@@ -436,6 +446,7 @@ class DatabaseManager:
                 COALESCE(SUM(total_tokens), 0) AS total_tokens
             FROM request_logs
             WHERE request_time >= ? AND request_time <= ?
+              AND COALESCE(client_source, 'legacy_unknown') != 'codex'
             GROUP BY COALESCE(NULLIF(TRIM(provider), ''), '历史记录未标注')
             ORDER BY total_tokens DESC, total_requests DESC
         """, (max(0, int(start_time)), end)).fetchall()

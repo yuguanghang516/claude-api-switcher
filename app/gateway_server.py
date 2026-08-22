@@ -11,8 +11,12 @@ import json
 import time
 import threading
 import requests
+from werkzeug.serving import make_server
 from typing import Dict, List, Optional, Any, Tuple
 from flask import Flask, request, jsonify, Response, stream_with_context
+
+from .client_source import classify_client_source
+from .gcli_failover import GcliModelFailover
 
 
 # 支持的供应商及其默认配置
@@ -84,14 +88,19 @@ class GatewayServer:
         self.logger = logger
         self.app = Flask(__name__)
         self.server_thread: Optional[threading.Thread] = None
+        self._http_server = None
         self._running = False
+        self.gcli_failover = GcliModelFailover()
         self._setup_routes()
 
     def _setup_routes(self):
         """设置路由"""
         self.app.add_url_rule("/v1/chat/completions", view_func=self._chat_completions, methods=["POST"])
+        self.app.add_url_rule("/v1/messages", view_func=self._anthropic_messages, methods=["POST"])
         self.app.add_url_rule("/v1/models", view_func=self._list_models, methods=["GET"])
         self.app.add_url_rule("/v1/health", view_func=self._health_check, methods=["GET"])
+        self.app.add_url_rule(
+            "/v1/gcli/failover/status", view_func=self._gcli_failover_status, methods=["GET"])
 
     def get_base_url(self) -> str:
         """获取网关基础 URL"""
@@ -101,18 +110,112 @@ class GatewayServer:
         """检查网关是否正在运行"""
         return self._running
 
+    def configure_gcli_failover(self, base_url: str, api_key: str, models: List[str],
+                                quota_percent: Optional[Dict[str, float]] = None,
+                                preferred_model: str = "") -> None:
+        self.gcli_failover.configure(
+            base_url, api_key, models, quota_percent, preferred_model)
+
+    def _incoming_api_key(self) -> str:
+        value = str(request.headers.get("x-api-key") or "").strip()
+        if value:
+            return value
+        authorization = str(request.headers.get("Authorization") or "")
+        return authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+
+    def _anthropic_messages(self):
+        """Anthropic-compatible gcli2api route with pre-output model failover."""
+        started = time.monotonic()
+        if not self.gcli_failover.is_configured():
+            return jsonify({"error": {
+                "type": "not_configured",
+                "message": "Gemini 自动切换尚未配置；请在 Gemini 反代页一键接入 Claude",
+            }}), 503
+        if not self.gcli_failover.verify_client_key(self._incoming_api_key()):
+            return jsonify({"error": {
+                "type": "authentication_error", "message": "本地网关 API 密码不匹配",
+            }}), 401
+        try:
+            payload = request.get_json(force=True)
+        except Exception:
+            return jsonify({"error": {"type": "invalid_request_error", "message": "无效的 JSON 请求"}}), 400
+        if not isinstance(payload, dict) or not payload.get("messages"):
+            return jsonify({"error": {"type": "invalid_request_error", "message": "消息列表为空"}}), 400
+        stream = bool(payload.get("stream"))
+        requested_model = str(payload.get("model") or "")
+        try:
+            upstream, used_model = self.gcli_failover.forward(payload, stream=stream)
+        except requests.exceptions.Timeout:
+            self._log_request(requested_model, 0, 0, 0,
+                              int((time.monotonic() - started) * 1000), "error", "上游请求超时")
+            return jsonify({"error": {"type": "timeout_error", "message": "gcli2api 请求超时"}}), 504
+        except requests.exceptions.ConnectionError:
+            return jsonify({"error": {
+                "type": "connection_error", "message": "无法连接 gcli2api；请检查服务状态",
+            }}), 502
+        except RuntimeError as exc:
+            return jsonify({"error": {"type": "failover_unavailable", "message": str(exc)}}), 503
+
+        content_type = upstream.headers.get("content-type", "application/json")
+        status_code = upstream.status_code
+        if stream and status_code == 200:
+            def generate():
+                try:
+                    for chunk in upstream.iter_content(chunk_size=8192):
+                        if chunk:
+                            yield chunk
+                finally:
+                    upstream.close()
+                    self._log_request(
+                        used_model, 0, 0, 0, int((time.monotonic() - started) * 1000),
+                        "success", "", provider="Gemini Antigravity (gcli2api)")
+            response = Response(stream_with_context(generate()), status=200, content_type=content_type)
+            response.headers["X-Gcli-Model-Used"] = used_model
+            return response
+
+        body = upstream.content
+        upstream.close()
+        input_tokens = output_tokens = 0
+        if status_code == 200:
+            try:
+                parsed = json.loads(body.decode("utf-8"))
+                usage = parsed.get("usage", {}) if isinstance(parsed, dict) else {}
+                input_tokens = int(usage.get("input_tokens", 0))
+                output_tokens = int(usage.get("output_tokens", 0))
+            except (UnicodeDecodeError, ValueError, TypeError):
+                pass
+        self._log_request(
+            used_model, input_tokens, output_tokens, input_tokens + output_tokens,
+            int((time.monotonic() - started) * 1000),
+            "success" if status_code == 200 else "error",
+            "" if status_code == 200 else f"HTTP {status_code}",
+            provider="Gemini Antigravity (gcli2api)")
+        response = Response(body, status=status_code, content_type=content_type)
+        response.headers["X-Gcli-Model-Used"] = used_model
+        return response
+
+    def _gcli_failover_status(self):
+        status = self.gcli_failover.status()
+        event = status.get("last_event")
+        if event:
+            status["last_event"] = {
+                "from_model": event.from_model, "to_model": event.to_model,
+                "reason": event.reason, "timestamp": event.timestamp,
+            }
+        return jsonify(status)
+
     def start(self) -> Tuple[bool, str]:
         """启动网关服务"""
         if self._running:
             return True, f"网关已在运行: {self.get_base_url()}"
 
-        def run_flask():
-            import logging
-            log = logging.getLogger("werkzeug")
-            log.setLevel(logging.ERROR)
-            self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False)
+        try:
+            self._http_server = make_server(self.host, self.port, self.app, threaded=True)
+        except OSError as exc:
+            return False, f"网关启动失败：端口 {self.port} 不可用（{str(exc)[:80]}）"
 
-        self.server_thread = threading.Thread(target=run_flask, daemon=True, name="gateway-server")
+        self.server_thread = threading.Thread(
+            target=self._http_server.serve_forever, daemon=True, name="gateway-server")
         self.server_thread.start()
         self._running = True
 
@@ -123,7 +226,13 @@ class GatewayServer:
 
     def stop(self) -> Tuple[bool, str]:
         """停止网关服务"""
-        # Flask 没有优雅的停止方式，daemon 线程会在主进程结束时自动停止
+        if self._http_server is not None:
+            self._http_server.shutdown()
+            self._http_server.server_close()
+            self._http_server = None
+        if self.server_thread and self.server_thread.is_alive():
+            self.server_thread.join(timeout=2)
+        self.server_thread = None
         self._running = False
         if self.logger:
             self.logger.info("AI Gateway 已停止")
@@ -430,6 +539,7 @@ class GatewayServer:
                 "response_time_ms": response_time_ms,
                 "status": status,
                 "error": error[:500] if error else "",
+                "client_source": classify_client_source(request.headers),
             })
         if self.logger and status == "error":
             self.logger.error(f"Gateway [{model}] {status}: {error}")

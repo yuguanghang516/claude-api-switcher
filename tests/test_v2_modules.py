@@ -16,7 +16,6 @@ from app.balance_checker import BalanceChecker, BalanceInfo
 from app.key_rotator import MultiKeyRotator, KeyStatus, KeyInfo
 from app.failover import FailoverEngine, FailoverTarget, CircuitBreaker, CircuitState, FailoverExhausted
 from app.smart_router import SmartRouter, ModelCapability, TaskClassifier, RoutingRule
-from app.cost_controller import CostController, BudgetStatus
 from app.pricing import PricingCalculator, MODEL_PRICING
 from app.notifier import Notifier, Notification, NotificationType, NotificationPriority
 from app.hot_reload import HotReloader, ConfigHotSwapper
@@ -52,7 +51,7 @@ class TestV2Config:
         assert v2_config.config is not None
         assert "multi_keys" in v2_config.config
         assert "routing_rules" in v2_config.config
-        assert "budget" in v2_config.config
+        assert "budget" not in v2_config.config
         assert "notifications" in v2_config.config
 
     def test_multi_keys_management(self, v2_config):
@@ -98,16 +97,6 @@ class TestV2Config:
         rule = v2_config.get_routing_rule("test")
         assert rule["description"] == "测试规则"
 
-    def test_budget_config(self, v2_config):
-        """测试预算配置"""
-        budget = v2_config.get_budget()
-        assert "daily_limit_usd" in budget
-        assert "monthly_limit_usd" in budget
-        assert "warning_threshold" in budget
-
-        assert v2_config.get_daily_limit() == budget["daily_limit_usd"]
-        assert v2_config.get_monthly_limit() == budget["monthly_limit_usd"]
-
     def test_routing_enabled(self, v2_config):
         """测试路由开关"""
         assert v2_config.is_routing_enabled() is True
@@ -118,7 +107,7 @@ class TestV2Config:
         """测试配置导入导出"""
         exported = v2_config.export_config()
         assert "routing_rules" in exported
-        assert "budget" in exported
+        assert "budget" not in exported
 
         # 修改后导入
         exported["routing_enabled"] = False
@@ -610,86 +599,6 @@ class TestSmartRouter:
         assert "selected_model" in info
 
 
-# ==================== Cost Controller Tests ====================
-
-class TestCostController:
-    """成本控制器测试"""
-
-    def test_init(self):
-        """测试初始化"""
-        controller = CostController(daily_limit=5.0, monthly_limit=100.0)
-        assert controller.daily_limit == 5.0
-        assert controller.monthly_limit == 100.0
-
-    def test_record_cost(self):
-        """测试记录花费"""
-        controller = CostController(daily_limit=10.0, monthly_limit=100.0)
-        controller.record_cost(0.5, "gpt-4o")
-        controller.record_cost(1.0, "claude")
-
-        status = controller.get_status()
-        assert status.daily_used == 1.5
-        assert status.daily_remaining == 8.5
-
-    def test_daily_percent(self):
-        """测试每日百分比"""
-        controller = CostController(daily_limit=10.0)
-        controller.record_cost(8.0, "gpt-4o")
-
-        status = controller.get_status()
-        assert status.daily_percent == 80.0
-
-    def test_budget_exceeded(self):
-        """测试预算超限"""
-        controller = CostController(daily_limit=5.0, auto_switch_cheap=False)
-        controller.record_cost(6.0, "gpt-4o")
-
-        status = controller.get_status()
-        assert status.budget_exceeded is True
-
-    def test_should_switch_to_cheap(self):
-        """测试是否应切换低成本"""
-        controller = CostController(daily_limit=5.0, auto_switch_cheap=True)
-        assert controller.should_switch_to_cheap() is False
-
-        controller.record_cost(6.0, "gpt-4o")
-        assert controller.should_switch_to_cheap() is True
-
-    def test_is_within_budget(self):
-        """测试是否在预算内"""
-        controller = CostController(daily_limit=5.0)
-        assert controller.is_within_budget() is True
-
-        controller.record_cost(6.0, "gpt-4o")
-        assert controller.is_within_budget() is False
-
-    def test_get_daily_usage_by_model(self):
-        """测试获取每日各模型花费"""
-        controller = CostController()
-        controller.record_cost(0.5, "gpt-4o")
-        controller.record_cost(1.0, "claude")
-        controller.record_cost(0.3, "gpt-4o")
-
-        usage = controller.get_daily_usage_by_model()
-        assert usage["gpt-4o"] == 0.8
-        assert usage["claude"] == 1.0
-
-    def test_cleanup_old_data(self):
-        """测试清理旧数据"""
-        controller = CostController()
-        controller.record_cost(1.0, "gpt-4o")
-        controller.cleanup_old_data(days=0)
-        # 清理后应该还有今日数据（days=0 表示清理 0 天前的）
-
-    def test_set_limits(self):
-        """测试设置预算"""
-        controller = CostController()
-        controller.set_daily_limit(10.0)
-        controller.set_monthly_limit(200.0)
-        assert controller.daily_limit == 10.0
-        assert controller.monthly_limit == 200.0
-
-
 # ==================== Pricing Calculator Tests ====================
 
 class TestPricingCalculator:
@@ -814,18 +723,6 @@ class TestNotifier:
         result = notifier.notify_api_error("OpenAI", "连接超时", "gpt-4o")
         assert result is True
 
-    def test_notify_budget_exceeded(self):
-        """测试预算超限通知"""
-        notifier = Notifier(desktop_enabled=False, webhook_enabled=False, min_interval=0)
-        result = notifier.notify_budget_exceeded(5.0, 5.0, 100.0, 100.0)
-        assert result is True
-
-    def test_notify_budget_warning(self):
-        """测试预算警告通知"""
-        notifier = Notifier(desktop_enabled=False, webhook_enabled=False, min_interval=0)
-        result = notifier.notify_budget_warning(85.0, 70.0)
-        assert result is True
-
     def test_get_history(self):
         """测试获取历史"""
         notifier = Notifier(desktop_enabled=False, webhook_enabled=False, min_interval=0)
@@ -948,33 +845,6 @@ class TestHotReload:
 class TestV2Integration:
     """V2 集成测试"""
 
-    def test_full_cost_flow(self):
-        """测试完整成本流程"""
-        # 创建组件
-        calc = PricingCalculator()
-        controller = CostController(daily_limit=5.0, monthly_limit=100.0,
-                                    auto_switch_cheap=True)
-
-        # 模拟一系列请求
-        requests = [
-            ("gpt-4o", 1000, 500),
-            ("claude-sonnet-4-20250514", 2000, 1000),
-            ("deepseek-chat", 5000, 2000),
-        ]
-
-        for model, input_tokens, output_tokens in requests:
-            cost = calc.calculate_cost(model, input_tokens, output_tokens)
-            controller.record_cost(cost.total_cost_usd, model)
-
-        # 检查状态
-        status = controller.get_status()
-        assert status.daily_used > 0
-        assert status.daily_limit == 5.0
-
-        # 检查各模型花费
-        usage = controller.get_daily_usage_by_model()
-        assert len(usage) == 3
-
     def test_key_rotation_flow(self):
         """测试 Key 轮转流程"""
         rotator = MultiKeyRotator(strategy="priority", max_consecutive_errors=2)
@@ -1035,71 +905,3 @@ class TestV2Integration:
         healthy = engine.get_healthy_targets()
         assert len(healthy) == 2
         assert all(t.model_name != "primary" for t in healthy)
-
-    def test_notification_with_cost(self):
-        """测试通知与成本集成"""
-        controller = CostController(daily_limit=5.0, warning_threshold=0.8)
-        notifier = Notifier(desktop_enabled=False, webhook_enabled=False, min_interval=0)
-
-        # 注册回调
-        controller.on_warning(lambda event, data: notifier.notify_budget_warning(
-            data.get("daily_percent", 0), data.get("monthly_percent", 0)))
-        controller.on_exceeded(lambda event, data: notifier.notify_budget_exceeded(
-            data.get("daily_used", 0), data.get("daily_limit", 0),
-            data.get("monthly_used", 0), data.get("monthly_limit", 0)))
-
-        # 记录费用触发警告 (get_status 内部触发回调)
-        controller.record_cost(4.5, "gpt-4o")  # 90% 超过 80% 阈值
-        status = controller.get_status()  # 触发阈值检查
-        assert status.warning_triggered is True
-
-        # 检查通知
-        history = notifier.get_history()
-        assert len(history) > 0
-
-    def test_smart_router_with_cost_control(self):
-        """测试智能路由与成本控制集成"""
-        router = SmartRouter()
-        controller = CostController(daily_limit=5.0, auto_switch_cheap=True)
-
-        # 注册模型
-        router.register_model(ModelCapability(
-            model_name="expensive",
-            provider_name="P1",
-            provider_id="p1",
-            base_url="url1",
-            api_key="key1",
-            auth_mode="bearer",
-            provider_type="custom",
-            input_price=10.0,
-            output_price=30.0,
-            context_length=128000,
-            capabilities=["chat"],
-        ))
-        router.register_model(ModelCapability(
-            model_name="cheap",
-            provider_name="P2",
-            provider_id="p2",
-            base_url="url2",
-            api_key="key2",
-            auth_mode="bearer",
-            provider_type="custom",
-            input_price=0.1,
-            output_price=0.2,
-            context_length=128000,
-            capabilities=["chat"],
-        ))
-
-        # 预算未超限，正常路由
-        messages = [{"role": "user", "content": "你好"}]
-        selected = router.route(messages)
-        assert selected is not None
-
-        # 预算超限
-        controller.record_cost(6.0, "expensive")
-        assert controller.should_switch_to_cheap() is True
-
-        # 切换到最便宜模型
-        cheapest = router.get_cheapest_model()
-        assert cheapest is not None
-        assert cheapest.model_name == "cheap"
