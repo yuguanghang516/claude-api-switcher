@@ -67,6 +67,31 @@ def test_timeout_has_actionable_message_without_real_network(monkeypatch):
     assert len(calls) == 1
 
 
+def test_timeout_is_provider_specific(monkeypatch):
+    calls = _mock_post(monkeypatch, 200)
+    ApiTester.test_provider(
+        "https://unit.invalid/anthropic", "SENSITIVE_SENTINEL", "unit-model",
+        provider_kind="custom")
+    ApiTester.test_provider(
+        "http://127.0.0.1:8787", "SENSITIVE_SENTINEL", "gemini-model",
+        auth_mode="x-api-key", provider_kind="gcli2api")
+
+    assert calls[0][1]["timeout"] == 15
+    assert calls[1][1]["timeout"] == 90
+
+
+def test_gcli_timeout_names_the_real_stage_and_limit(monkeypatch):
+    calls = _mock_post(monkeypatch, requests.exceptions.Timeout("unit timeout"))
+    ok, message, _ = ApiTester.test_provider(
+        "http://127.0.0.1:8787", "SENSITIVE_SENTINEL", "gemini-model",
+        auth_mode="x-api-key", provider_kind="gcli2api")
+
+    assert not ok
+    assert "90 秒" in message
+    assert "凭证验证或模型切换" in message
+    assert calls[0][1]["timeout"] == 90
+
+
 @pytest.mark.parametrize(
     ("status", "expected_words"),
     [

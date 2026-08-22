@@ -73,3 +73,35 @@ def test_saved_gateway_gcli_connection_is_used_as_fallback():
     window.model_manager = Models()
     assert window._saved_gcli_connection() == (
         "gateway-password", MODE_GEMINI_CLI, "gemini-enterprise")
+
+
+def test_saved_gcli_local_gateway_is_detected_for_restart():
+    window = MainWindow.__new__(MainWindow)
+    window.gateway = type(
+        "Gateway", (), {"get_base_url": lambda self: "http://127.0.0.1:8787"})()
+
+    class Providers:
+        def get_all_providers(self):
+            return [{"name": "Gemini", "provider_kind": "gcli2api"}]
+
+        def get_provider_detail(self, _name):
+            return {"base_url": "HTTP://127.0.0.1:8787/"}
+
+    window.provider_manager = Providers()
+    assert window._saved_gcli_uses_local_gateway() is True
+
+
+def test_direct_gcli_connection_does_not_restart_local_gateway():
+    window = MainWindow.__new__(MainWindow)
+    window.gateway = type(
+        "Gateway", (), {"get_base_url": lambda self: "http://127.0.0.1:8787"})()
+
+    class Providers:
+        def get_all_providers(self):
+            return [{"name": "Gemini", "provider_kind": "gcli2api"}]
+
+        def get_provider_detail(self, _name):
+            return {"base_url": "http://127.0.0.1:7861/antigravity"}
+
+    window.provider_manager = Providers()
+    assert window._saved_gcli_uses_local_gateway() is False

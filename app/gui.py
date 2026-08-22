@@ -667,6 +667,18 @@ class MainWindow:
             return str(item.get("api_key") or ""), mode, str(model or "gemini-2.5-pro")
         return "", MODE_ANTIGRAVITY, "gemini-2.5-pro"
 
+    def _saved_gcli_uses_local_gateway(self) -> bool:
+        """Return whether Claude was previously connected through the failover gateway."""
+        expected = self.gateway.get_base_url().rstrip("/").lower()
+        for item in self.provider_manager.get_all_providers():
+            if item.get("provider_kind") != "gcli2api":
+                continue
+            detail = self.provider_manager.get_provider_detail(item.get("name", "")) or {}
+            actual = str(detail.get("base_url") or "").rstrip("/").lower()
+            if actual == expected:
+                return True
+        return False
+
     def _set_gcli_busy(self, busy: bool, message: str = ""):
         self._gcli_busy = busy
         for key, button in getattr(self, "gcli_buttons", {}).items():
@@ -860,6 +872,14 @@ class MainWindow:
         self.gateway.configure_gcli_failover(
             self.gcli2api.claude_base_url(MODE_ANTIGRAVITY),
             self._gcli_password(), models, quota, preferred)
+        if (self._gcli_password() and models
+                and self._saved_gcli_uses_local_gateway()
+                and not self.gateway.is_running()):
+            ok, message = self.gateway.start()
+            if ok:
+                self.logger.info(f"已自动恢复 Gemini 本地切换网关: {self.gateway.get_base_url()}")
+            else:
+                self.logger.error(f"Gemini 本地切换网关自动恢复失败: {message}")
 
     def _generate_gcli_password(self):
         if self._gcli_status.running:
@@ -1272,7 +1292,8 @@ class MainWindow:
         test_btn.pack(side="left", padx=PAD_XS)
         status_text, status_color = self._provider_status(name, provider)
         status = ctk.CTkLabel(actions, text=status_text, text_color=status_color,
-                              anchor="w", font=ctk.CTkFont(size=10))
+                              anchor="w",
+                              font=ctk.CTkFont(family=FONT_FAMILY, size=11))
         status.pack(side="left", padx=PAD_SM, fill="x", expand=True)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=58, height=30,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
@@ -1288,6 +1309,10 @@ class MainWindow:
         if not provider.get("enabled", True):
             return t("status_disabled", self.lang), TEXT_MUTED
         if name in self._testing:
+            if provider.get("provider_kind") == "gcli2api":
+                return self._ui(
+                    "正在验证凭证并尝试可用模型（最长 90 秒）",
+                    "Validating credentials and trying models (up to 90s)"), INFO
             return t("status_testing", self.lang), INFO
         if self.provider_manager.is_verified(name):
             return t("status_available", self.lang), SUCCESS
@@ -1375,7 +1400,11 @@ class MainWindow:
         self._pending_test_actions[name] = action
         self._refresh_provider_list()
         self._refresh_current_status()
-        self._append_log(f"正在检测 {name}…")
+        provider = self.provider_manager.get_provider_detail(name) or {}
+        if provider.get("provider_kind") == "gcli2api":
+            self._append_log(f"正在检测 {name}：验证凭证并尝试可用模型，最长等待 90 秒…")
+        else:
+            self._append_log(f"正在检测 {name}…")
         if action == "launch":
             self._set_quick_launch_state("quick_launch_testing", True)
 

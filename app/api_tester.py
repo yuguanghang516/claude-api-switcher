@@ -8,10 +8,17 @@ import requests
 
 
 TEST_TIMEOUT = 15
+GCLI2API_TEST_TIMEOUT = 90
 
 
 class ApiTester:
     """每次测试只发送一个最小请求，不跟随重定向。"""
+
+    @staticmethod
+    def timeout_for(provider_kind: str) -> int:
+        return (GCLI2API_TEST_TIMEOUT
+                if str(provider_kind or "").strip().lower() == "gcli2api"
+                else TEST_TIMEOUT)
 
     @staticmethod
     def _gcli_rate_limit_message(response) -> str:
@@ -81,13 +88,15 @@ class ApiTester:
             "max_tokens": 5,
             "messages": [{"role": "user", "content": "hi"}],
         }
+        normalized_kind = str(provider_kind or "").strip().lower()
+        request_timeout = ApiTester.timeout_for(normalized_kind)
         started = time.monotonic()
         try:
             response = requests.post(
                 endpoint,
                 headers=headers,
                 json=payload,
-                timeout=TEST_TIMEOUT,
+                timeout=request_timeout,
                 allow_redirects=False,
             )
             elapsed_ms = int((time.monotonic() - started) * 1000)
@@ -99,7 +108,7 @@ class ApiTester:
             if status == 401:
                 return False, "失败 · 401 认证失败（检查 API Key 或认证方式）", elapsed_ms
             if status == 403:
-                if provider_kind == "gcli2api":
+                if normalized_kind == "gcli2api":
                     try:
                         detail = str(response.json()).lower()
                     except (ValueError, TypeError):
@@ -123,7 +132,7 @@ class ApiTester:
             if status == 404:
                 return False, "失败 · 404 API 地址或模型不存在", elapsed_ms
             if status == 429:
-                if provider_kind == "gcli2api":
+                if normalized_kind == "gcli2api":
                     return False, ApiTester._gcli_rate_limit_message(response), elapsed_ms
                 return False, "失败 · 429 请求过于频繁或额度不足", elapsed_ms
             if status >= 500:
@@ -131,7 +140,12 @@ class ApiTester:
             return False, f"失败 · HTTP {status}", elapsed_ms
         except requests.exceptions.Timeout:
             elapsed_ms = int((time.monotonic() - started) * 1000)
-            return False, f"失败 · 超时（>{TEST_TIMEOUT}秒）", elapsed_ms
+            if normalized_kind == "gcli2api":
+                return False, (
+                    f"失败 · gcli2api 在 {request_timeout} 秒内未完成凭证验证或模型切换；"
+                    "请检查 7861/8787 服务和 gcli2api 日志"
+                ), elapsed_ms
+            return False, f"失败 · 超时（>{request_timeout}秒）", elapsed_ms
         except requests.exceptions.ConnectionError as exc:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             detail = str(exc).lower()
