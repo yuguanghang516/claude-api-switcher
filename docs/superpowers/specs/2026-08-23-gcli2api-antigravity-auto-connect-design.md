@@ -1,0 +1,76 @@
+# gcli2api Antigravity 自动接入设计
+
+日期：2026-08-23
+
+## 问题
+
+当前“Gemini 反代”页只按旧 Gemini CLI 通道检测 `/v1/models`，点击“添加到 Claude”也固定创建 `http://127.0.0.1:7861`、Bearer Token 和 `gemini-2.5-pro`。个人 Google 账户通过旧通道请求时会收到 `SUBSCRIPTION_REQUIRED (#3501)`，但软件只显示“403 无权限”，用户无法判断是本地密码、Google 凭证还是许可证问题，只能进入编辑弹窗手动改地址和认证方式。编辑弹窗中的 `field_api_key` 还没有正确翻译。
+
+## 目标
+
+- “Gemini 反代”页提供“Antigravity（个人用户推荐）”与“Gemini CLI（企业许可证）”两种接入模式，默认选择 Antigravity。
+- 软件分别检测 `/antigravity/v1/models` 与 `/v1/models`，并按当前模式显示模型和下一步。
+- 点击“一键接入 Claude”时自动创建或迁移供应商，不要求用户填写编辑表单。
+- 反代地址、模型、认证方式和 API Key 全部自动写入；API Key 直接复用页面中的本地 API 密码，不显示、不记录明文日志。
+- 点击“一键接入网关”时使用相同模式、地址、密码和模型。
+- 已有 `Gemini CLI (gcli2api)` 供应商在选择 Antigravity 后原位迁移，避免产生难以区分的重复卡片。
+- 403 提示区分本地认证失败与 Google 上游许可证/凭证失败，并给出可执行的下一步。
+- 修复 `field_api_key` 中英文翻译和相关帮助文本。
+- 保留企业 Gemini CLI 通道，不影响已经获得 Gemini Code Assist 许可证的用户。
+- 不上传 GitHub；完成测试后在桌面替换本地 EXE。
+
+## 交互设计
+
+“Gemini 反代”卡片在本地密码和模型之间增加模式选择：
+
+1. `Antigravity（个人用户推荐）`：说明用户需要在 gcli2api 面板完成“Antigravity认证”，Claude 地址为 `/antigravity`，认证方式为 `x-api-key`。
+2. `Gemini CLI（企业许可证）`：说明仅适用于已经分配 Gemini Code Assist Standard/Enterprise 许可证的组织账户，Claude 地址使用服务根地址，认证方式为 Bearer Token。
+
+状态区始终显示当前模式和准确的下一步。Antigravity 没有凭证时，引导用户依次点击“打开面板 → Antigravity认证 → AG凭证确认正常 → 返回检测服务”。服务、密码和凭证可用后，“一键接入 Claude”和“一键接入网关”才可点击。
+
+用户点击“一键接入 Claude”后，软件自动完成：
+
+- 读取当前模式和已经检测到的模型；
+- 读取“本地 API 密码”输入框中的值；
+- Antigravity 模式写入 `http://127.0.0.1:7861/antigravity`、`x-api-key`、可用主模型和快速模型；
+- 企业 Gemini CLI 模式写入 `http://127.0.0.1:7861`、Bearer Token、可用主模型和快速模型；
+- 将本地 API 密码安全保存到 Windows 凭据管理器；
+- 刷新供应商卡片并提示用户点击“测试并使用”。
+
+用户不需要打开供应商编辑弹窗，也不需要再次复制反代地址或 API 密码。
+
+## 状态与错误处理
+
+检测结果分为：服务未运行、本地密码缺失、本地密码错误、当前模式无凭证、当前模式就绪、Google 上游许可证不足、Google 凭证失效、限流或额度不足、服务异常。
+
+- 401 或本地 `/models` 返回的认证失败：提示本地 API 密码与服务启动时的 `API_PASSWORD` 不一致。
+- Antigravity 无模型或无 AG 凭证：提示进入面板完成 Antigravity 认证，不把服务误判为未安装。
+- 旧 Gemini CLI 请求返回 `SUBSCRIPTION_REQUIRED (#3501)`：提示个人用户切换到 Antigravity；企业用户联系管理员分配许可证。
+- 403 但无法确定上游原因：提示打开面板检查当前模式凭证，不把所有 403 都归因于 API Key。
+- 429：提示等待限流恢复并在面板检查凭证配额。
+
+API 测试器只解析并展示安全的错误类别，不回显请求头、API 密码、OAuth Token 或完整上游响应。
+
+## 代码边界
+
+- `Gcli2ApiManager` 负责模式到端点、认证方式、模型列表和安全错误类别的映射。
+- GUI 负责模式选择、步骤提示以及调用统一的“自动接入”入口。
+- `ProviderManager` 继续负责配置更新和 Windows 凭据管理器写入，不在 JSON 中保存 API Key。
+- `ApiTester` 接收供应商类型，对 gcli2api 403 返回专用且可执行的说明；其他供应商保持现有通用行为。
+- 中英文字符串统一进入 `i18n.py`，不在控件上显示未翻译的键名。
+
+## 迁移规则
+
+- 通过 `provider_kind=gcli2api` 查找已有 Claude 供应商，修改名称、地址、认证方式、模型与凭据，不新增重复供应商。
+- 网关中同样按 `provider_type=gcli2api` 原位更新。
+- 用户手工创建、且没有 gcli2api 类型标记的自定义供应商不自动修改。
+- 切回企业 Gemini CLI 模式时仍使用同一条 gcli2api 供应商记录。
+
+## 验证
+
+- 单元测试覆盖两种模式的地址、认证方式、模型发现、自动迁移、API Key 复用和安全错误提示。
+- 回归测试确认其他供应商的编辑、测试与启动行为不变。
+- 完整运行 pytest 测试集。
+- PyInstaller 构建单文件 EXE，验证深色和浅色主题下模式选择、状态说明、按钮启用状态、自动接入以及 `field_api_key` 翻译。
+- 使用本机 gcli2api 验证：旧 GCLI 凭证会显示许可证指引；完成 AG 认证后可自动接入并测试。
+- 确认没有向 GitHub 推送提交。
