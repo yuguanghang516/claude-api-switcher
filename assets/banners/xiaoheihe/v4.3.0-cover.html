@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <title>Claude API Switcher V4.3.0 小黑盒封面</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { width: 1920px; height: 1080px; margin: 0; overflow: hidden; }
+    body {
+      font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+      color: #f8fbff;
+      background: #020617;
+    }
+    .cover {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      isolation: isolate;
+      background-image:
+        linear-gradient(90deg, rgba(2, 6, 23, .30) 0%, rgba(2, 6, 23, .14) 48%, rgba(2, 6, 23, 0) 72%),
+        url("v4.3.0-cover-background.png");
+      background-position: center;
+      background-size: cover;
+    }
+    .cover::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background:
+        radial-gradient(circle at 66% 48%, rgba(18, 223, 243, .12), transparent 25%),
+        linear-gradient(90deg, rgba(2, 6, 23, .88) 0%, rgba(3, 10, 32, .80) 38%, rgba(3, 10, 32, .18) 63%, rgba(2, 6, 23, .08) 100%);
+    }
+    .cover::after {
+      content: "";
+      position: absolute;
+      inset: 32px;
+      border: 1px solid rgba(153, 198, 255, .12);
+      border-radius: 34px;
+      pointer-events: none;
+    }
+    .brand-line {
+      position: absolute;
+      left: 150px;
+      top: 102px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: #a8b8d7;
+      font-family: "Segoe UI", sans-serif;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: .22em;
+    }
+    .brand-line::before {
+      content: "";
+      width: 56px;
+      height: 4px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #12dff3, #7c3aed, #d946ef);
+      box-shadow: 0 0 20px rgba(18, 223, 243, .6);
+    }
+    .copy {
+      position: absolute;
+      left: 146px;
+      top: 190px;
+      width: 1010px;
+    }
+    h1 {
+      margin: 0;
+      max-width: 930px;
+      font-size: 112px;
+      line-height: 1.08;
+      font-weight: 900;
+      letter-spacing: -.055em;
+      text-wrap: balance;
+      text-shadow: 0 12px 42px rgba(0, 0, 0, .48);
+    }
+    h1 .line { display: block; }
+    h1 .gradient {
+      display: inline-block;
+      font-family: "Segoe UI", "Arial", sans-serif;
+      font-size: 124px;
+      letter-spacing: -.045em;
+      background: linear-gradient(100deg, #dffbff 0%, #33e6f4 26%, #4f8dff 54%, #a873ff 78%, #ef7cff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+      filter: drop-shadow(0 0 28px rgba(88, 111, 255, .23));
+    }
+    .subhead {
+      display: flex;
+      align-items: center;
+      width: max-content;
+      max-width: 1000px;
+      margin-top: 45px;
+      padding: 18px 25px;
+      border: 1px solid rgba(138, 184, 255, .20);
+      border-radius: 17px;
+      background: linear-gradient(120deg, rgba(15, 30, 67, .74), rgba(11, 18, 48, .48));
+      box-shadow: inset 0 1px rgba(255, 255, 255, .05), 0 14px 50px rgba(0, 0, 0, .18);
+      backdrop-filter: blur(18px);
+      color: #d6e3f7;
+      font-size: 28px;
+      font-weight: 650;
+      letter-spacing: .015em;
+    }
+    .subhead strong { color: #fff; font-weight: 800; }
+    .tags {
+      display: flex;
+      gap: 14px;
+      margin-top: 28px;
+    }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      padding: 0 22px;
+      border: 1px solid rgba(139, 188, 255, .28);
+      border-radius: 999px;
+      background: rgba(8, 19, 48, .66);
+      color: #bcd1ef;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+    .tag.primary {
+      border-color: rgba(105, 244, 255, .42);
+      background: linear-gradient(110deg, rgba(0, 136, 255, .27), rgba(124, 58, 237, .28));
+      color: #fff;
+      box-shadow: 0 0 28px rgba(57, 162, 255, .16);
+    }
+    .visual {
+      position: absolute;
+      right: 120px;
+      top: 168px;
+      width: 700px;
+      height: 700px;
+      display: grid;
+      place-items: center;
+    }
+    .halo {
+      position: absolute;
+      width: 610px;
+      height: 610px;
+      border-radius: 50%;
+      border: 1px solid rgba(94, 195, 255, .24);
+      background:
+        radial-gradient(circle, rgba(30, 112, 255, .17) 0%, rgba(80, 54, 210, .10) 43%, transparent 68%);
+      box-shadow: inset 0 0 110px rgba(46, 115, 255, .08), 0 0 100px rgba(43, 86, 255, .10);
+    }
+    .halo::before, .halo::after {
+      content: "";
+      position: absolute;
+      border-radius: 50%;
+      border: 1px dashed rgba(139, 184, 255, .16);
+    }
+    .halo::before { inset: 47px; }
+    .halo::after { inset: 98px; border-color: rgba(209, 116, 255, .17); }
+    .app-icon {
+      position: relative;
+      z-index: 2;
+      width: 570px;
+      height: 570px;
+      object-fit: contain;
+      filter:
+        drop-shadow(0 42px 54px rgba(0, 0, 0, .48))
+        drop-shadow(0 0 36px rgba(40, 186, 255, .24))
+        drop-shadow(0 0 58px rgba(146, 66, 255, .18));
+      transform: translateY(-6px);
+    }
+    .route-label {
+      position: absolute;
+      z-index: 3;
+      padding: 10px 17px;
+      border: 1px solid rgba(180, 213, 255, .25);
+      border-radius: 999px;
+      background: rgba(5, 13, 38, .74);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, .28);
+      color: #dcecff;
+      font-family: "Segoe UI", sans-serif;
+      font-size: 17px;
+      font-weight: 750;
+      letter-spacing: .08em;
+      backdrop-filter: blur(12px);
+    }
+    .route-label::before {
+      content: "";
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: #45e7f4;
+      box-shadow: 0 0 12px currentColor;
+    }
+    .claude { left: 50px; top: 110px; }
+    .gemini { right: 26px; top: 190px; }
+    .gemini::before { background: #b56bff; }
+    .longcat { right: 78px; bottom: 80px; }
+    .longcat::before { background: #6f8cff; }
+    .footer {
+      position: absolute;
+      left: 150px;
+      bottom: 76px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      color: #7187aa;
+      font-family: "Segoe UI", sans-serif;
+      font-size: 17px;
+      font-weight: 600;
+      letter-spacing: .14em;
+    }
+    .footer .status {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: #35f2c1;
+      box-shadow: 0 0 15px rgba(53, 242, 193, .8);
+    }
+  </style>
+</head>
+<body>
+  <main class="cover">
+    <div class="brand-line">CLAUDE API SWITCHER</div>
+    <section class="copy">
+      <h1>
+        <span class="line">一个软件，</span>
+        <span class="line">接管你的</span>
+        <span class="line gradient">Claude API</span>
+      </h1>
+      <div class="subhead"><strong>Claude · Gemini · LongCat</strong>｜一键配置 · 自动切换 · 用量监控</div>
+      <div class="tags">
+        <span class="tag primary">V4.3.0</span>
+        <span class="tag">免费开源</span>
+      </div>
+    </section>
+    <section class="visual" aria-label="软件品牌图标与 API 路径">
+      <div class="halo"></div>
+      <span class="route-label claude">CLAUDE</span>
+      <span class="route-label gemini">GEMINI</span>
+      <span class="route-label longcat">LONGCAT</span>
+      <img class="app-icon" src="../../app_icon.png" alt="Claude API Switcher 图标">
+    </section>
+    <div class="footer"><span class="status"></span>WINDOWS · ONE-CLICK SETUP · OPEN SOURCE</div>
+  </main>
+</body>
+</html>
