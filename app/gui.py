@@ -8,6 +8,7 @@ import webbrowser
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 
@@ -651,7 +652,8 @@ class MainWindow:
                 mode = MODE_ANTIGRAVITY
             return (
                 str(detail.get("api_key") or ""), mode,
-                str(detail.get("model") or "gemini-2.5-pro"),
+                Gcli2ApiManager.normalize_model_name(
+                    str(detail.get("model") or "gemini-2.5-pro")),
             )
         for item in self.model_manager.get_all_providers():
             if item.get("provider_type") != "gcli2api":
@@ -664,7 +666,10 @@ class MainWindow:
                 mode = MODE_ANTIGRAVITY
             models = self.model_manager.get_models_by_provider(item.get("id", ""))
             model = (models[0].get("model_name") if models else "gemini-2.5-pro")
-            return str(item.get("api_key") or ""), mode, str(model or "gemini-2.5-pro")
+            return (
+                str(item.get("api_key") or ""), mode,
+                Gcli2ApiManager.normalize_model_name(str(model or "gemini-2.5-pro")),
+            )
         return "", MODE_ANTIGRAVITY, "gemini-2.5-pro"
 
     def _saved_gcli_uses_local_gateway(self) -> bool:
@@ -753,16 +758,26 @@ class MainWindow:
                 font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
                     fill="x", padx=PAD_SM, pady=PAD_SM)
             return
-        visible_models = [
-            item for item in snapshot.models
-            if self.gcli2api.is_claude_text_model(item.model)
-        ]
+        by_model = {}
+        for item in snapshot.models:
+            model = self.gcli2api.normalize_model_name(item.model)
+            if not self.gcli2api.is_claude_text_model(model):
+                continue
+            previous = by_model.get(model.lower())
+            if previous is None or item.remaining_percent > previous.remaining_percent:
+                by_model[model.lower()] = item
+        visible_models = sorted(
+            by_model.values(),
+            key=lambda item: self.gcli2api.model_priority_key(
+                self.gcli2api.normalize_model_name(item.model)))
+        current_model = self.gcli2api.normalize_model_name(self.gcli_model_var.get())
         self.gcli_quota_summary.configure(
             text=self._ui(
-                f"{snapshot.credential_count} 个凭证 · {len(visible_models)} 个 Claude 文本模型",
-                f"{snapshot.credential_count} credentials · {len(visible_models)} Claude text models"),
+                f"{snapshot.credential_count} 个凭证 · {len(visible_models)} 个可调用文本模型",
+                f"{snapshot.credential_count} credentials · {len(visible_models)} callable text models"),
             text_color=SUCCESS)
         for item in visible_models:
+            model = self.gcli2api.normalize_model_name(item.model)
             row = ctk.CTkFrame(self.gcli_quota_list, fg_color="transparent")
             row.pack(fill="x", padx=PAD_XS, pady=PAD_XS)
             row.grid_columnconfigure(0, weight=1)
@@ -776,7 +791,7 @@ class MainWindow:
             credential_text = self._ui(
                 f"{item.credential_count} 个凭证", f"{item.credential_count} credentials")
             ctk.CTkLabel(
-                row, text=item.model, anchor="w", text_color=TEXT_PRIMARY,
+                row, text=model, anchor="w", text_color=TEXT_PRIMARY,
                 font=ctk.CTkFont(family=FONT_MONO, size=12, weight="bold")).grid(
                     row=0, column=0, sticky="ew", padx=(PAD_SM, PAD_XS))
             ctk.CTkLabel(
@@ -788,12 +803,57 @@ class MainWindow:
                 row, text=f"{credential_text} · {self._ui('重置', 'Reset')} {reset}",
                 anchor="e", text_color=TEXT_MUTED,
                 font=ctk.CTkFont(family=FONT_FAMILY, size=12)).grid(
-                    row=0, column=2, sticky="e", padx=(PAD_XS, PAD_SM))
+                    row=0, column=2, sticky="e", padx=PAD_XS)
+            is_current = model == current_model
+            ctk.CTkButton(
+                row,
+                text=self._ui("当前使用", "In use") if is_current
+                else self._ui("切换使用", "Use model"),
+                width=88, height=30, corner_radius=8,
+                fg_color=BG_INPUT if is_current else GEMINI_ACCENT,
+                hover_color=BORDER if is_current else GEMINI_HOVER,
+                text_color=TEXT_MUTED if is_current else "#FFFFFF",
+                state="disabled" if is_current else "normal",
+                command=lambda selected=model: self._switch_gcli_model(selected),
+            ).grid(row=0, column=3, sticky="e", padx=(PAD_XS, PAD_SM))
             progress = ctk.CTkProgressBar(
                 row, height=6, progress_color=color, fg_color=BORDER)
-            progress.grid(row=1, column=0, columnspan=3, sticky="ew",
+            progress.grid(row=1, column=0, columnspan=4, sticky="ew",
                           padx=PAD_SM, pady=(PAD_XS, PAD_SM))
             progress.set(percent / 100)
+
+    def _switch_gcli_model(self, model: str):
+        """Apply a quota-list model choice to the gateway and saved Claude provider."""
+        model = self.gcli2api.normalize_model_name(model)
+        if not self.gcli2api.is_claude_text_model(model):
+            messagebox.showerror(t("error", self.lang), self._ui(
+                "该条目不是可供 Claude 使用的文本模型。",
+                "This entry is not a Claude-compatible text model."))
+            return
+        self.gcli_model_var.set(model)
+        existing = next((item for item in self.provider_manager.get_all_providers()
+                         if item.get("provider_kind") == "gcli2api"), None)
+        if existing:
+            detail = self.provider_manager.get_provider_detail(existing.get("name", "")) or {}
+            ok, message = self.provider_manager.add_or_update_provider(
+                name=str(detail.get("name") or existing.get("name") or ""),
+                old_name=str(existing.get("name") or ""),
+                base_url=str(detail.get("base_url") or self.gateway.get_base_url()),
+                model=model, small_fast_model=model,
+                api_key=str(detail.get("api_key") or self._gcli_password()),
+                enabled=bool(detail.get("enabled", True)),
+                priority=int(detail.get("priority", 10)),
+                auth_mode=str(detail.get("auth_mode") or "x-api-key"),
+                provider_kind="gcli2api",
+            )
+            if not ok:
+                messagebox.showerror(t("error", self.lang), message)
+                return
+        self._configure_gcli_failover()
+        self._render_gcli_quotas(self._gcli_quota_snapshot)
+        self._refresh_provider_list()
+        self._refresh_current_status()
+        self._append_log(f"✓ Gemini 反代已切换为 {model}；后续 Claude 请求将优先使用该模型")
 
     def _import_gcli_credentials(self):
         if self._gcli_mode() != MODE_ANTIGRAVITY:
@@ -859,16 +919,21 @@ class MainWindow:
         """Keep the local Anthropic gateway aligned with the current gcli state."""
         if self._gcli_mode() != MODE_ANTIGRAVITY:
             return
-        models = list(self._gcli_status.models)
+        models = list(self.gcli2api.clean_claude_models(self._gcli_status.models))
         if not models and self._gcli_quota_snapshot and self._gcli_quota_snapshot.ok:
-            models = [item.model for item in self._gcli_quota_snapshot.models]
+            models = list(self.gcli2api.clean_claude_models(
+                tuple(item.model for item in self._gcli_quota_snapshot.models)))
         quota = {}
         if self._gcli_quota_snapshot and self._gcli_quota_snapshot.ok:
-            quota = {
-                item.model: item.remaining_percent
-                for item in self._gcli_quota_snapshot.models
-            }
-        preferred = self.gcli_model_var.get().strip() or (models[0] if models else "")
+            for item in self._gcli_quota_snapshot.models:
+                model = self.gcli2api.normalize_model_name(item.model)
+                if model in models:
+                    quota[model] = max(quota.get(model, 0), item.remaining_percent)
+        preferred = self.gcli2api.normalize_model_name(self.gcli_model_var.get())
+        if preferred not in models:
+            preferred = models[0] if models else ""
+        if preferred:
+            self.gcli_model_var.set(preferred)
         self.gateway.configure_gcli_failover(
             self.gcli2api.claude_base_url(MODE_ANTIGRAVITY),
             self._gcli_password(), models, quota, preferred)
@@ -996,12 +1061,14 @@ class MainWindow:
                     status, bool(self._gcli_password()), self.lang, self._gcli_mode()),
                 text_color=TEXT_PRIMARY if status.state not in {"error", "auth_required"} else DANGER)
         if status.models:
-            values = list(status.models)
+            values = list(self.gcli2api.clean_claude_models(status.models))
             self.gcli_model_combo.configure(values=values)
             primary, _ = self.gcli2api.select_models(values)
-            current = self.gcli_model_var.get()
+            current = self.gcli2api.normalize_model_name(self.gcli_model_var.get())
             if current not in values:
                 self.gcli_model_var.set(primary)
+            elif current != self.gcli_model_var.get():
+                self.gcli_model_var.set(current)
         install_button = getattr(self, "gcli_buttons", {}).get("gcli_install")
         if install_button:
             install_button.configure(
@@ -1311,8 +1378,8 @@ class MainWindow:
         if name in self._testing:
             if provider.get("provider_kind") == "gcli2api":
                 return self._ui(
-                    "正在验证凭证并尝试可用模型（最长 90 秒）",
-                    "Validating credentials and trying models (up to 90s)"), INFO
+                    "正在启动服务并验证模型（最长 90 秒）",
+                    "Starting services and validating models (up to 90s)"), INFO
             return t("status_testing", self.lang), INFO
         if self.provider_manager.is_verified(name):
             return t("status_available", self.lang), SUCCESS
@@ -1387,6 +1454,86 @@ class MainWindow:
         self.status_state.configure(text=state_text, text_color=color)
         self.status_indicator.configure(text="●" if color == SUCCESS else "○", text_color=color)
 
+    @staticmethod
+    def _gcli_mode_for_provider(provider) -> str:
+        name = str(provider.get("name") or "").lower()
+        base_url = str(provider.get("base_url") or "").lower()
+        if "enterprise" in name and "/antigravity" not in base_url:
+            return MODE_GEMINI_CLI
+        return MODE_ANTIGRAVITY
+
+    def _prepare_gcli_provider_for_test(self, provider):
+        """Ensure local gcli2api and its embedded failover gateway are ready."""
+        if provider.get("provider_kind") != "gcli2api":
+            return True, "", None, None
+        base_url = str(provider.get("base_url") or "").strip()
+        host = (urlparse(base_url).hostname or "").lower()
+        if host not in {"localhost", "127.0.0.1", "::1"}:
+            return True, "远程 gcli2api 将直接检测，不启动本机服务", None, None
+        password = str(provider.get("api_key") or "").strip()
+        if not password:
+            return False, (
+                "尚未保存本地 API 密码。请到 Gemini 反代页填写服务启动时使用的 "
+                "API_PASSWORD，再点击“测试并使用”。"
+            ), None, None
+        mode = self._gcli_mode_for_provider(provider)
+        ok, message, status = self.gcli2api.start_and_wait(
+            password, password, mode=mode)
+        if not ok:
+            return False, message, status, None
+        if not status.ready:
+            auth_name = "Antigravity 凭证" if mode == MODE_ANTIGRAVITY else "企业 Gemini CLI OAuth"
+            return False, (
+                f"gcli2api 服务已启动，但还不能调用。请到 Gemini 反代页点击“打开面板”，"
+                f"使用同一个本地 API 密码登录并完成 {auth_name}，然后重试。"
+            ), status, None
+
+        snapshot = None
+        quota = {}
+        quota_models = ()
+        if mode == MODE_ANTIGRAVITY:
+            snapshot = self.gcli2api.get_model_quotas(password, mode)
+            if snapshot.ok:
+                quota_models = tuple(item.model for item in snapshot.models)
+                for item in snapshot.models:
+                    model = self.gcli2api.normalize_model_name(item.model)
+                    quota[model] = max(quota.get(model, 0), item.remaining_percent)
+        models = list(self.gcli2api.clean_claude_models(
+            tuple(status.models) + tuple(quota_models)))
+        if not models:
+            return False, (
+                "服务已启动，但没有可供 Claude 使用的文本模型。请打开 gcli2api 面板检查凭证和额度。"
+            ), status, snapshot
+        stored_model = str(provider.get("model") or "")
+        preferred = self.gcli2api.normalize_model_name(stored_model)
+        if preferred not in models:
+            preferred = models[0]
+        if stored_model != preferred:
+            save_ok, save_message = self.provider_manager.add_or_update_provider(
+                name=str(provider.get("name") or "Gemini Antigravity (gcli2api)"),
+                old_name=str(provider.get("name") or ""),
+                base_url=base_url,
+                model=preferred, small_fast_model=preferred,
+                api_key=password,
+                enabled=bool(provider.get("enabled", True)),
+                priority=int(provider.get("priority", 10)),
+                auth_mode=str(provider.get("auth_mode") or "x-api-key"),
+                provider_kind="gcli2api",
+            )
+            if not save_ok:
+                return False, f"模型配置迁移失败：{save_message}", status, snapshot
+        self.gateway.configure_gcli_failover(
+            self.gcli2api.claude_base_url(mode), password, models, quota, preferred)
+        uses_gateway = base_url.rstrip("/").lower() == self.gateway.get_base_url().rstrip("/").lower()
+        if uses_gateway:
+            gateway_ok, gateway_message = self.gateway.start()
+            if not gateway_ok:
+                return False, gateway_message, status, snapshot
+        return True, (
+            f"gcli2api 已就绪；{'本地切换网关已启动' if uses_gateway else '将使用直连模式'}；"
+            f"优先模型 {preferred}"
+        ), status, snapshot
+
     def _begin_test(self, name: str, action: str):
         if name in self._testing:
             priority = {"test": 0, "select": 1, "launch": 2}
@@ -1402,27 +1549,40 @@ class MainWindow:
         self._refresh_current_status()
         provider = self.provider_manager.get_provider_detail(name) or {}
         if provider.get("provider_kind") == "gcli2api":
-            self._append_log(f"正在检测 {name}：验证凭证并尝试可用模型，最长等待 90 秒…")
+            self._append_log(f"正在检测 {name}：先自动启动 7861/8787 服务，再验证模型，最长等待 90 秒…")
         else:
             self._append_log(f"正在检测 {name}…")
         if action == "launch":
             self._set_quick_launch_state("quick_launch_testing", True)
 
         def worker():
+            prep_status = prep_snapshot = None
             try:
-                result = self.provider_manager.test_provider(name)
+                prep_ok, prep_message, prep_status, prep_snapshot = (
+                    self._prepare_gcli_provider_for_test(provider))
+                if not prep_ok:
+                    result = (False, prep_message, 0)
+                else:
+                    if prep_message:
+                        self.logger.info(prep_message)
+                    result = self.provider_manager.test_provider(name)
             except Exception as exc:
                 result = (False, f"检测失败：{type(exc).__name__}", 0)
-            self._result_queue.put((name, action, result))
+            self._result_queue.put((name, action, result, prep_status, prep_snapshot))
 
         threading.Thread(target=worker, daemon=True, name=f"api-test-{name}").start()
 
     def _poll_test_results(self):
         try:
             while True:
-                name, original_action, result = self._result_queue.get_nowait()
+                name, original_action, result, prep_status, prep_snapshot = self._result_queue.get_nowait()
                 action = self._pending_test_actions.pop(name, original_action)
                 self._testing.discard(name)
+                if prep_status is not None:
+                    self._gcli_status = prep_status
+                    self._render_gcli_status(prep_status)
+                if prep_snapshot is not None:
+                    self._render_gcli_quotas(prep_snapshot)
                 success, message, _ = result
                 self._test_results[name] = (success, message)
                 self._append_log(f"{'✓' if success else '✕'} {name}: {message}")
@@ -1446,7 +1606,10 @@ class MainWindow:
         self.root.after(100, self._poll_test_results)
 
     def _use_provider(self, name: str):
-        if self.provider_manager.is_verified(name):
+        detail = self.provider_manager.get_provider_detail(name) or {}
+        if detail.get("provider_kind") == "gcli2api":
+            self._begin_test(name, "select")
+        elif self.provider_manager.is_verified(name):
             ok, message = self.provider_manager.set_current(name)
             if ok:
                 self._append_log(message)
@@ -1476,7 +1639,9 @@ class MainWindow:
                 self._ui("未检测到 Claude Code。请点击“一键安装 / 更新”，软件会自动下载、安装并配置 PATH。",
                          "Claude Code was not found. Click Install / Update; the app will download, install and configure PATH."))
             return
-        if self.provider_manager.is_verified(provider["name"]):
+        if provider.get("provider_kind") == "gcli2api":
+            self._begin_test(provider["name"], "launch")
+        elif self.provider_manager.is_verified(provider["name"]):
             if self.config.get_current_provider_name() != provider["name"]:
                 ok, message = self.provider_manager.set_current(provider["name"])
                 if not ok:

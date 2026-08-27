@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from app.gcli2api_manager import Gcli2ApiStatus, MODE_ANTIGRAVITY, MODE_GEMINI_CLI
+from app.gcli2api_manager import (
+    Gcli2ApiManager, Gcli2ApiStatus, GcliModelQuota, GcliQuotaSnapshot,
+    MODE_ANTIGRAVITY, MODE_GEMINI_CLI,
+)
 from app.gui import MainWindow, gcli_guide_text
 
 
@@ -45,7 +48,7 @@ def test_saved_claude_gcli_connection_restores_password_and_mode():
         def get_provider_detail(self, _name):
             return {
                 "base_url": "http://127.0.0.1:7861/antigravity",
-                "api_key": "saved-password", "model": "gemini-pro",
+                "api_key": "saved-password", "model": "假流式/gemini-pro",
             }
 
     window.provider_manager = Providers()
@@ -105,3 +108,129 @@ def test_direct_gcli_connection_does_not_restart_local_gateway():
 
     window.provider_manager = Providers()
     assert window._saved_gcli_uses_local_gateway() is False
+
+
+def test_prepare_local_gcli_starts_services_and_uses_clean_ranked_models():
+    window = MainWindow.__new__(MainWindow)
+    calls = {"start": 0, "gateway": 0}
+
+    class Gcli:
+        def start_and_wait(self, password, panel_password, mode):
+            calls["start"] += 1
+            assert password == panel_password == "local-password"
+            return True, "ready", Gcli2ApiStatus(
+                state="ready", running=True, ready=True, mode=mode,
+                models=("假流式/gemini-3.6-flash-high", "claude-sonnet-4-6"))
+
+        def get_model_quotas(self, _password, _mode):
+            return GcliQuotaSnapshot(True, models=(
+                GcliModelQuota("流式抗截断/gemini-3.6-flash-high", 88),
+                GcliModelQuota("claude-sonnet-4-6", 100),
+            ))
+
+        normalize_model_name = staticmethod(Gcli2ApiManager.normalize_model_name)
+        clean_claude_models = staticmethod(Gcli2ApiManager.clean_claude_models)
+
+        @staticmethod
+        def claude_base_url(_mode):
+            return "http://127.0.0.1:7861/antigravity"
+
+    class Gateway:
+        def get_base_url(self):
+            return "http://127.0.0.1:8787"
+
+        def configure_gcli_failover(self, base_url, key, models, quota, preferred):
+            calls["configured"] = (base_url, key, models, quota, preferred)
+
+        def start(self):
+            calls["gateway"] += 1
+            return True, "started"
+
+    window.gcli2api = Gcli()
+    window.gateway = Gateway()
+    window.provider_manager = type("Providers", (), {
+        "add_or_update_provider": lambda self, **kwargs: (
+            calls.update({"saved_model": kwargs["model"]}) or True, "saved")
+    })()
+    ok, message, status, snapshot = window._prepare_gcli_provider_for_test({
+        "name": "Gemini Antigravity (gcli2api)",
+        "provider_kind": "gcli2api",
+        "base_url": "http://127.0.0.1:8787",
+        "api_key": "local-password",
+        "model": "假流式/gemini-3.6-flash-high",
+    })
+
+    assert ok and status.ready and snapshot.ok
+    assert calls["start"] == calls["gateway"] == 1
+    assert calls["configured"][2] == ["claude-sonnet-4-6", "gemini-3.6-flash-high"]
+    assert calls["configured"][4] == "gemini-3.6-flash-high"
+    assert calls["saved_model"] == "gemini-3.6-flash-high"
+    assert "本地切换网关已启动" in message
+
+
+def test_prepare_gcli_oauth_required_explains_exact_next_step():
+    window = MainWindow.__new__(MainWindow)
+    window.gcli2api = type("Gcli", (), {
+        "start_and_wait": lambda self, *args, **kwargs: (
+            True, "oauth", Gcli2ApiStatus(
+                state="oauth_required", running=True, ready=False,
+                mode=MODE_ANTIGRAVITY)),
+    })()
+    window.gateway = object()
+
+    ok, message, _, _ = window._prepare_gcli_provider_for_test({
+        "provider_kind": "gcli2api", "name": "Gemini Antigravity (gcli2api)",
+        "base_url": "http://127.0.0.1:8787", "api_key": "password",
+    })
+
+    assert not ok
+    assert "打开面板" in message and "Antigravity 凭证" in message
+
+
+def test_switch_gcli_model_persists_both_claude_model_slots():
+    window = MainWindow.__new__(MainWindow)
+    saved = {}
+
+    class Value:
+        value = "gemini-2.5-pro"
+
+        def get(self):
+            return self.value
+
+        def set(self, value):
+            self.value = value
+
+    class Providers:
+        def get_all_providers(self):
+            return [{"name": "Gemini", "provider_kind": "gcli2api"}]
+
+        def get_provider_detail(self, _name):
+            return {
+                "name": "Gemini", "base_url": "http://127.0.0.1:8787",
+                "api_key": "password", "enabled": True, "priority": 10,
+                "auth_mode": "x-api-key",
+            }
+
+        def add_or_update_provider(self, **kwargs):
+            saved.update(kwargs)
+            return True, "saved"
+
+    window.lang = "zh"
+    window.gcli2api = Gcli2ApiManager
+    window.gcli_model_var = Value()
+    window.provider_manager = Providers()
+    window.gateway = type("Gateway", (), {"get_base_url": lambda self: "http://127.0.0.1:8787"})()
+    window._gcli_quota_snapshot = None
+    calls = []
+    window._gcli_password = lambda: "password"
+    window._configure_gcli_failover = lambda: calls.append("configured")
+    window._render_gcli_quotas = lambda _snapshot: calls.append("rendered")
+    window._refresh_provider_list = lambda: None
+    window._refresh_current_status = lambda: None
+    window._append_log = lambda message: calls.append(message)
+
+    window._switch_gcli_model("假流式/claude-opus-4-6-thinking")
+
+    assert window.gcli_model_var.get() == "claude-opus-4-6-thinking"
+    assert saved["model"] == saved["small_fast_model"] == "claude-opus-4-6-thinking"
+    assert "configured" in calls and "rendered" in calls

@@ -152,6 +152,43 @@ def test_extract_models_deduplicates_and_ignores_invalid():
     assert result == ("gemini-a",)
 
 
+def test_clean_claude_models_removes_transport_aliases_and_duplicates():
+    result = Gcli2ApiManager.clean_claude_models([
+        "gemini-3.6-flash-high",
+        "假流式/gemini-3.6-flash-high",
+        "流式抗截断/gemini-3.6-flash-high",
+        "claude-sonnet-4-6",
+        "chat_20706",
+        "gemini-3.1-flash-image",
+    ])
+
+    assert result == ("claude-sonnet-4-6", "gemini-3.6-flash-high")
+
+
+def test_normalize_model_name_strips_nested_feature_prefixes():
+    assert Gcli2ApiManager.normalize_model_name(
+        " 假流式/流式抗截断/gemini-2.5-pro "
+    ) == "gemini-2.5-pro"
+
+
+def test_clean_claude_models_prioritizes_stronger_models():
+    result = Gcli2ApiManager.clean_claude_models([
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-high",
+        "gpt-oss-120b-medium",
+        "claude-sonnet-4-6",
+        "claude-opus-4-6-thinking",
+    ])
+
+    assert result == (
+        "claude-opus-4-6-thinking",
+        "claude-sonnet-4-6",
+        "gpt-oss-120b-medium",
+        "gemini-3.1-pro-high",
+        "gemini-3.5-flash-lite",
+    )
+
+
 @pytest.mark.parametrize("model,expected", [
     ("gemini-3.1-pro-high", True),
     ("claude-sonnet-4-6", True),

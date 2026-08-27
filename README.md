@@ -1,8 +1,8 @@
-# Claude API Switcher V4.3.0
+# Claude API Switcher V4.3.1
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.3.0.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.3.1.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -48,7 +48,7 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.3.0.exe`。
+1. 从 GitHub Releases 下载 `Claude API Switcher V4.3.1.exe`。
 2. 双击运行。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -69,8 +69,11 @@
 2. 本地 API 密码由你自己设置，不是 Google API Key。可以直接输入，也可以点击“生成并复制”；启动时软件把同一个密码设置为 API 和面板密码。默认只监听 `127.0.0.1:7861`。
 3. 个人 Google 账户选择“Antigravity（个人用户推荐）”，打开面板完成 Antigravity 认证并确认 AG 凭证；只有企业许可证账户才选择 Gemini CLI。
 4. 也可以直接点“导入凭证 JSON”选择一个或多个 Antigravity 凭证；软件会先在本机校验 JSON，再通过 gcli2api 正式上传接口导入。
-5. 点击“检测服务”获取模型列表和逐模型额度，再选择“接入 Claude（自动切换）”或“一键接入网关”。地址、模型、认证方式和本地 API 密码会自动填写；接入 Claude 后，到下方 API 供应商点击“测试并使用”，才会切换当前 Provider。
-5. “调用示例”提供 Anthropic、OpenAI 和 Gemini 三种可复制格式，示例只使用密码占位符。
+5. 点击“检测服务”获取模型列表和逐模型额度。列表只显示真实文本模型，不再重复显示“假流式/”和“流式抗截断/”别名；高能力 Claude、GPT 和 Gemini Pro/Thinking 模型优先排列。
+6. 每个额度模型右侧都可点击“切换使用”。选择会立即同步到 Claude 供应商和自动切换网关，并跨重启保留。
+7. 选择“接入 Claude（自动切换）”或“一键接入网关”。地址、模型、认证方式和本地 API 密码会自动填写。
+8. 回到“API 切换”页点击 Gemini 供应商的“测试”或“测试并使用”。软件会先自动确保 7861 gcli2api 和 8787 本地切换网关已启动，再做真实 API 测试；若缺少登录、密码不匹配或端口被占用，会直接说明下一步。
+9. “调用示例”提供 Anthropic、OpenAI 和 Gemini 三种可复制格式，示例只使用密码占位符。
 
 如果已经通过终端安装，软件会自动识别 `%USERPROFILE%\gcli2api`、桌面、文档、LocalAppData、RoamingAppData 或 `GCLI2API_HOME` 指定的完整安装目录。检测到后直接显示“已安装，未运行”，启动时使用现有 `.venv`，不会要求重复安装。
 
@@ -159,7 +162,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-当前 V4.3.0 基线：371 项自动化测试全部通过；实机已验证 `gemini-2.5-pro` 返回 429 后自动切换到同系列可用模型并成功返回 200，并验证耗时 23.3 秒的 gcli2api 测试不会再被旧版 15 秒阈值误报超时；已保存的自动切换配置会在软件重启后恢复 8787 本地网关；源码界面已完成凭证 JSON 导入、逐模型额度、密码可见性、Claude-only Token 口径、7 天热力图、更新入口、新图标、浅色、深色和干净退出验证。
+当前 V4.3.1 基线：377 项自动化测试全部通过；实机从已保存配置自动启动 gcli2api，检测到 23 个可调用文本模型，额度接口与 8787 本地切换网关均正常；V4.3.0 的 429 自动切换与 90 秒测试修复继续保留。单文件 EXE 已完成版本信息、启动、日志和正常关闭验证。
 
 ## 仓库边界
 

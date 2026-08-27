@@ -360,15 +360,68 @@ class Gcli2ApiManager:
                     names.append(name)
         return tuple(names)
 
-    @staticmethod
-    def is_claude_text_model(model: str) -> bool:
+    FEATURE_MODEL_PREFIXES = ("假流式/", "流式抗截断/")
+
+    @classmethod
+    def normalize_model_name(cls, model: str) -> str:
+        """Return the real upstream model id instead of a gcli transport alias."""
+        name = str(model or "").strip()
+        changed = True
+        while changed and name:
+            changed = False
+            for prefix in cls.FEATURE_MODEL_PREFIXES:
+                if name.startswith(prefix):
+                    name = name[len(prefix):].strip()
+                    changed = True
+        return name
+
+    @classmethod
+    def is_claude_text_model(cls, model: str) -> bool:
         """Hide gcli2api internal/image/agent entries from Claude-facing choices."""
-        name = str(model or "").strip().lower()
+        name = cls.normalize_model_name(model).lower()
         if not name:
             return False
         if any(marker in name for marker in ("image", "tab_", "chat_", "-agent", "_agent")):
             return False
         return any(family in name for family in ("gemini", "claude", "gpt-oss"))
+
+    @staticmethod
+    def model_priority_key(model: str) -> tuple:
+        """Order stronger Claude-facing models first while keeping a stable fallback."""
+        name = str(model or "").lower()
+        if "claude" in name:
+            family = 0
+            tier = 0 if "opus" in name else (1 if "sonnet" in name else 2)
+        elif "gpt-oss" in name or "gpt" in name:
+            family = 1
+            tier = 0 if any(size in name for size in ("120b", "200b", "405b")) else 1
+        elif "gemini" in name:
+            family = 2
+            if "pro" in name:
+                tier = 0
+            elif "thinking" in name or "high" in name:
+                tier = 1
+            elif "flash" in name and not any(word in name for word in ("lite", "low", "extra-low")):
+                tier = 2
+            else:
+                tier = 3
+        else:
+            family, tier = 3, 9
+        thinking_penalty = 0 if "thinking" in name else 1
+        return family, tier, thinking_penalty, name
+
+    @classmethod
+    def clean_claude_models(cls, models: Sequence[str]) -> Tuple[str, ...]:
+        """Canonicalize aliases, remove non-text entries, de-duplicate and rank models."""
+        clean = []
+        seen = set()
+        for value in models:
+            model = cls.normalize_model_name(value)
+            key = model.lower()
+            if cls.is_claude_text_model(model) and key not in seen:
+                clean.append(model)
+                seen.add(key)
+        return tuple(sorted(clean, key=cls.model_priority_key))
 
     def _status(self, **changes) -> Gcli2ApiStatus:
         base = {
@@ -581,9 +634,8 @@ class Gcli2ApiManager:
     def _antigravity_quota_models(self, api_password: str) -> Tuple[str, ...]:
         """Use gcli2api's authenticated quota API when its model-list call is empty."""
         snapshot = self.get_model_quotas(api_password, MODE_ANTIGRAVITY)
-        return tuple(
-            item.model for item in snapshot.models
-            if self.is_claude_text_model(item.model)
+        return self.clean_claude_models(
+            tuple(item.model for item in snapshot.models)
         ) if snapshot.ok else ()
 
     def detect(self, api_password: str = "", mode: str = MODE_ANTIGRAVITY) -> Gcli2ApiStatus:
@@ -648,7 +700,7 @@ class Gcli2ApiManager:
             return self._status(state="error", running=True, error_code="invalid_json", mode=mode,
                                 message="模型接口返回了无效 JSON")
         if mode == MODE_ANTIGRAVITY:
-            models = tuple(model for model in models if self.is_claude_text_model(model))
+            models = self.clean_claude_models(models)
         if not models and mode == MODE_ANTIGRAVITY:
             models = self._antigravity_quota_models(api_password)
         if not models:
@@ -658,14 +710,13 @@ class Gcli2ApiManager:
         return self._status(state="ready", running=True, ready=True, models=models, mode=mode,
                             message=f"可以调用 · {len(models)} 个模型")
 
-    @staticmethod
-    def select_models(models: Sequence[str]) -> Tuple[str, str]:
-        clean = [str(model).strip() for model in models if str(model).strip()]
-        gemini = [model for model in clean if "gemini" in model.lower()]
-        primary = next((model for model in gemini if "pro" in model.lower()), "")
-        if not primary:
-            primary = gemini[0] if gemini else (clean[0] if clean else "gemini-2.5-pro")
-        fast = next((model for model in gemini if "flash" in model.lower()), primary)
+    @classmethod
+    def select_models(cls, models: Sequence[str]) -> Tuple[str, str]:
+        clean = list(cls.clean_claude_models(models))
+        primary = clean[0] if clean else "gemini-2.5-pro"
+        fast = next((model for model in clean if any(
+            marker in model.lower() for marker in ("flash", "haiku", "lite")
+        )), primary)
         return primary, fast
 
     def start(self, api_password: str = "", panel_password: str = "") -> Tuple[bool, str]:
