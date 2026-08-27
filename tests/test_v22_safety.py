@@ -68,8 +68,13 @@ def test_launcher_uses_x_api_key_without_inherited_bearer(tmp_path, monkeypatch)
 
     assert ok is True
     assert captured["env"]["ANTHROPIC_API_KEY"] == "new-key"
-    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
+    assert "ANTHROPIC_AUTH_TOKEN" not in captured["env"]
     assert "new-tab" in captured["command"]
+    assert captured["command"][:3] == ["wt.exe", "-w", "new"]
+    assert "Claude Code · Unit" in captured["command"]
+    assert captured["command"][-2:] == ["--setting-sources", "local"]
+    assert captured["env"]["CLAUDE_CONFIG_DIR"].endswith(
+        "ClaudeAPISwitcher\\claude-session")
 
 
 def test_launcher_uses_bearer_without_inherited_x_api_key(tmp_path, monkeypatch):
@@ -91,7 +96,41 @@ def test_launcher_uses_bearer_without_inherited_x_api_key(tmp_path, monkeypatch)
 
     assert ok is True
     assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "new-token"
-    assert captured["env"]["ANTHROPIC_API_KEY"] == ""
+    assert "ANTHROPIC_API_KEY" not in captured["env"]
+    assert captured["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] == "unit-model"
+
+
+def test_launcher_overrides_inherited_longcat_routing(tmp_path, monkeypatch):
+    captured = {}
+    claude_path = tmp_path / "claude.cmd"
+    claude_path.write_text("@echo off", encoding="utf-8")
+    for name, value in {
+        "ANTHROPIC_BASE_URL": "https://api.longcat.chat/anthropic",
+        "ANTHROPIC_MODEL": "LongCat-2.0",
+        "ANTHROPIC_SMALL_FAST_MODEL": "LongCat-2.0",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": "LongCat-2.0",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": "LongCat-2.0",
+        "ANTHROPIC_API_KEY": "old-key",
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(launcher_module.shutil, "which", _mock_which)
+    monkeypatch.setattr(
+        launcher_module.subprocess, "Popen",
+        lambda command, **kwargs: captured.update(command=command, **kwargs),
+    )
+
+    ok, _ = ClaudeLauncher.launch(
+        "Gemini Antigravity (gcli2api)", "http://127.0.0.1:8787", "gcli-password",
+        "claude-opus-4-6-thinking", "claude-opus-4-6-thinking", str(tmp_path),
+        claude_path=str(claude_path), auth_mode="bearer",
+    )
+
+    assert ok
+    assert captured["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:8787"
+    assert captured["env"]["ANTHROPIC_MODEL"] == "claude-opus-4-6-thinking"
+    assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "gcli-password"
+    assert "ANTHROPIC_API_KEY" not in captured["env"]
+    assert captured["command"][-2:] == ["--setting-sources", "local"]
 
 
 def test_project_resolver_prefers_manual_directory(tmp_path):

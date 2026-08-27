@@ -792,7 +792,7 @@ class MainWindow:
                 f"{item.credential_count} 个凭证", f"{item.credential_count} credentials")
             ctk.CTkLabel(
                 row, text=model, anchor="w", text_color=TEXT_PRIMARY,
-                font=ctk.CTkFont(family=FONT_MONO, size=12, weight="bold")).grid(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")).grid(
                     row=0, column=0, sticky="ew", padx=(PAD_SM, PAD_XS))
             ctk.CTkLabel(
                 row, text=f"{percent:.0f}% · {state}", text_color=color,
@@ -813,6 +813,7 @@ class MainWindow:
                 fg_color=BG_INPUT if is_current else GEMINI_ACCENT,
                 hover_color=BORDER if is_current else GEMINI_HOVER,
                 text_color=TEXT_MUTED if is_current else "#FFFFFF",
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
                 state="disabled" if is_current else "normal",
                 command=lambda selected=model: self._switch_gcli_model(selected),
             ).grid(row=0, column=3, sticky="e", padx=(PAD_XS, PAD_SM))
@@ -843,7 +844,9 @@ class MainWindow:
                 api_key=str(detail.get("api_key") or self._gcli_password()),
                 enabled=bool(detail.get("enabled", True)),
                 priority=int(detail.get("priority", 10)),
-                auth_mode=str(detail.get("auth_mode") or "x-api-key"),
+                auth_mode=("bearer" if str(detail.get("base_url") or "").rstrip("/").lower()
+                           == self.gateway.get_base_url().rstrip("/").lower()
+                           else str(detail.get("auth_mode") or "x-api-key")),
                 provider_kind="gcli2api",
             )
             if not ok:
@@ -1222,7 +1225,7 @@ class MainWindow:
                       else self.gcli2api.claude_base_url(mode)),
             model=model, small_fast_model=fast_model, api_key=password,
             enabled=True, priority=10,
-            auth_mode=("x-api-key" if auto_failover else self.gcli2api.auth_mode_for(mode)),
+            auth_mode=("bearer" if auto_failover else self.gcli2api.auth_mode_for(mode)),
             provider_kind="gcli2api")
         if ok:
             self._refresh_provider_list()
@@ -1504,11 +1507,14 @@ class MainWindow:
             return False, (
                 "服务已启动，但没有可供 Claude 使用的文本模型。请打开 gcli2api 面板检查凭证和额度。"
             ), status, snapshot
+        uses_gateway = base_url.rstrip("/").lower() == self.gateway.get_base_url().rstrip("/").lower()
+        desired_auth_mode = "bearer" if uses_gateway else str(
+            provider.get("auth_mode") or self.gcli2api.auth_mode_for(mode))
         stored_model = str(provider.get("model") or "")
         preferred = self.gcli2api.normalize_model_name(stored_model)
         if preferred not in models:
             preferred = models[0]
-        if stored_model != preferred:
+        if stored_model != preferred or str(provider.get("auth_mode") or "") != desired_auth_mode:
             save_ok, save_message = self.provider_manager.add_or_update_provider(
                 name=str(provider.get("name") or "Gemini Antigravity (gcli2api)"),
                 old_name=str(provider.get("name") or ""),
@@ -1517,14 +1523,13 @@ class MainWindow:
                 api_key=password,
                 enabled=bool(provider.get("enabled", True)),
                 priority=int(provider.get("priority", 10)),
-                auth_mode=str(provider.get("auth_mode") or "x-api-key"),
+                auth_mode=desired_auth_mode,
                 provider_kind="gcli2api",
             )
             if not save_ok:
                 return False, f"模型配置迁移失败：{save_message}", status, snapshot
         self.gateway.configure_gcli_failover(
             self.gcli2api.claude_base_url(mode), password, models, quota, preferred)
-        uses_gateway = base_url.rstrip("/").lower() == self.gateway.get_base_url().rstrip("/").lower()
         if uses_gateway:
             gateway_ok, gateway_message = self.gateway.start()
             if not gateway_ok:
@@ -1690,9 +1695,6 @@ class MainWindow:
         current = self.provider_manager.get_current_provider()
         if current and current.get("enabled", True) and current.get("has_api_key"):
             return current
-        for item in self.provider_manager.get_all_providers():
-            if item.get("enabled", True) and item.get("has_api_key"):
-                return self.provider_manager.get_provider_detail(item["name"])
         return None
 
     def _resolve_project_directory(self, for_launch: bool = False):

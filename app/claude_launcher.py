@@ -46,25 +46,38 @@ class ClaudeLauncher:
             return False, "找不到终端，无法打开 Claude"
 
         child_env = os.environ.copy()
-        # Claude Code 中 AUTH_TOKEN 表示 Bearer，API_KEY 表示 x-api-key。
-        # 先移除父进程遗留值，避免两种认证方式互相抢占。
-        child_env.pop("ANTHROPIC_AUTH_TOKEN", None)
-        child_env.pop("ANTHROPIC_API_KEY", None)
-        # 空字符串也要显式传入，用来覆盖 ~/.claude/settings.json 中可能
-        # 保存的另一套认证变量；Claude Code 对进程环境的优先级更高。
+        # 清除父进程中的旧供应商路由。空字符串仍会被 Claude Code 当作
+        # “已设置”，因此未使用的认证变量必须完全不存在。
+        for name in (
+            "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        ):
+            child_env.pop(name, None)
         credential_env = (
-            {"ANTHROPIC_API_KEY": api_key, "ANTHROPIC_AUTH_TOKEN": ""}
+            {"ANTHROPIC_API_KEY": api_key}
             if auth_mode == "x-api-key"
-            else {"ANTHROPIC_AUTH_TOKEN": api_key, "ANTHROPIC_API_KEY": ""}
+            else {"ANTHROPIC_AUTH_TOKEN": api_key}
         )
         child_env.update({
             "ANTHROPIC_BASE_URL": base_url,
             "ANTHROPIC_MODEL": model,
             "ANTHROPIC_SMALL_FAST_MODEL": small_fast_model or model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": small_fast_model or model,
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
             "CLAUDE_SWITCHER_CLAUDE_PATH": claude_path,
         })
+        # Claude Code 会把 ~/.claude/settings.json 中的 env 配置覆盖到进程环境。
+        # 给软件启动的会话使用独立状态目录，并排除 user/project 设置源，避免
+        # 全局 LongCat 等旧路由重新覆盖用户刚选择的供应商。API Key 仍只在
+        # 子进程环境中，不会写入这个目录或出现在命令行。
+        local_app_data = os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local")
+        child_env["CLAUDE_CONFIG_DIR"] = os.path.join(
+            local_app_data, "ClaudeAPISwitcher", "claude-session")
         child_env.update(credential_env)
 
         # 命令行中没有 Key；敏感信息只存在于新进程环境中。
@@ -72,15 +85,17 @@ class ClaudeLauncher:
         if wt_path:
             command = [
                 wt_path,
+                "-w", "new",
                 "new-tab",
-                "--title", "Claude Code",
+                "--title", f"Claude Code · {provider_name}",
                 cmd_path or "cmd.exe", "/K", claude_path,
+                "--setting-sources", "local",
             ]
         else:
             command = [
                 cmd_path,
                 "/K",
-                f"title Claude Code && {claude_path}",
+                f'title Claude Code && call "{claude_path}" --setting-sources local',
             ]
         creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         try:

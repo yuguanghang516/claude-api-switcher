@@ -50,6 +50,28 @@ class ApiTester:
         return "失败 · 429 当前请求受限；请稍后重试或切换模型"
 
     @staticmethod
+    def _safe_error_detail(response, api_key: str = "") -> str:
+        """Return a bounded upstream error without echoing credentials."""
+        try:
+            payload = response.json()
+        except (ValueError, TypeError):
+            payload = {}
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        if isinstance(error, dict):
+            detail = str(error.get("message") or error.get("detail") or error.get("type") or "")
+        else:
+            detail = str(error or "")
+        detail = re.sub(r"\s+", " ", detail).strip()
+        lowered = detail.lower()
+        sensitive_markers = (
+            "authorization", "bearer ", "api_key", "api key", "access_token",
+            "refresh_token", "password", "token=",
+        )
+        if (api_key and api_key in detail) or any(marker in lowered for marker in sensitive_markers):
+            return "服务返回的错误包含敏感字段，详情已隐藏"
+        return detail[:240]
+
+    @staticmethod
     def test_provider(
         base_url: str,
         api_key: str,
@@ -83,12 +105,16 @@ class ApiTester:
         else:
             headers = {**common_headers, "Authorization": f"Bearer {api_key}"}
 
+        normalized_kind = str(provider_kind or "").strip().lower()
         payload = {
             "model": model,
-            "max_tokens": 5,
-            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 64 if normalized_kind == "gcli2api" else 5,
+            "messages": [{
+                "role": "user",
+                "content": ([{"type": "text", "text": "Reply only OK"}]
+                            if normalized_kind == "gcli2api" else "hi"),
+            }],
         }
-        normalized_kind = str(provider_kind or "").strip().lower()
         request_timeout = ApiTester.timeout_for(normalized_kind)
         started = time.monotonic()
         try:
@@ -135,6 +161,10 @@ class ApiTester:
                 if normalized_kind == "gcli2api":
                     return False, ApiTester._gcli_rate_limit_message(response), elapsed_ms
                 return False, "失败 · 429 请求过于频繁或额度不足", elapsed_ms
+            if status == 400 and normalized_kind == "gcli2api":
+                detail = ApiTester._safe_error_detail(response, api_key)
+                suffix = f"：{detail}" if detail else ""
+                return False, f"失败 · HTTP 400 请求不兼容{suffix}", elapsed_ms
             if status >= 500:
                 return False, f"失败 · {status} 服务暂时不可用", elapsed_ms
             return False, f"失败 · HTTP {status}", elapsed_ms

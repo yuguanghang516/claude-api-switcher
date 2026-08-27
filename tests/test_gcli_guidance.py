@@ -150,7 +150,10 @@ def test_prepare_local_gcli_starts_services_and_uses_clean_ranked_models():
     window.gateway = Gateway()
     window.provider_manager = type("Providers", (), {
         "add_or_update_provider": lambda self, **kwargs: (
-            calls.update({"saved_model": kwargs["model"]}) or True, "saved")
+            calls.update({
+                "saved_model": kwargs["model"],
+                "saved_auth_mode": kwargs["auth_mode"],
+            }) or True, "saved")
     })()
     ok, message, status, snapshot = window._prepare_gcli_provider_for_test({
         "name": "Gemini Antigravity (gcli2api)",
@@ -165,6 +168,7 @@ def test_prepare_local_gcli_starts_services_and_uses_clean_ranked_models():
     assert calls["configured"][2] == ["claude-sonnet-4-6", "gemini-3.6-flash-high"]
     assert calls["configured"][4] == "gemini-3.6-flash-high"
     assert calls["saved_model"] == "gemini-3.6-flash-high"
+    assert calls["saved_auth_mode"] == "bearer"
     assert "本地切换网关已启动" in message
 
 
@@ -233,4 +237,17 @@ def test_switch_gcli_model_persists_both_claude_model_slots():
 
     assert window.gcli_model_var.get() == "claude-opus-4-6-thinking"
     assert saved["model"] == saved["small_fast_model"] == "claude-opus-4-6-thinking"
+    assert saved["auth_mode"] == "bearer"
     assert "configured" in calls and "rendered" in calls
+
+
+def test_quick_launch_provider_never_falls_back_to_longcat():
+    window = MainWindow.__new__(MainWindow)
+    window.provider_manager = type("Providers", (), {
+        "get_current_provider": lambda self: None,
+        "get_all_providers": lambda self: [{
+            "name": "LongCat", "enabled": True, "has_api_key": True,
+        }],
+    })()
+
+    assert window._find_launch_provider() is None

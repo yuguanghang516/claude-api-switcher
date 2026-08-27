@@ -103,6 +103,53 @@ class TestApiTesterMockedRequests:
         assert "local-password" not in msg
 
     @patch("app.api_tester.requests.post")
+    def test_gcli_uses_claude_compatible_probe_payload(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_post.return_value = mock_response
+
+        ApiTester.test_provider(
+            "http://127.0.0.1:8787", "local-password",
+            "claude-opus-4-6-thinking", auth_mode="bearer", provider_kind="gcli2api")
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["max_tokens"] >= 32
+        assert payload["messages"][0]["content"] == [{"type": "text", "text": "Reply only OK"}]
+
+    @patch("app.api_tester.requests.post")
+    def test_gcli_http_400_shows_safe_upstream_detail(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "error": {"type": "invalid_request_error", "message": "thinking model requires max_tokens >= 32"}
+        }
+        mock_post.return_value = mock_response
+
+        success, message, _ = ApiTester.test_provider(
+            "http://127.0.0.1:8787", "local-password",
+            "claude-opus-4-6-thinking", auth_mode="bearer", provider_kind="gcli2api")
+
+        assert not success
+        assert "400" in message and "max_tokens" in message
+        assert "local-password" not in message
+
+    @patch("app.api_tester.requests.post")
+    def test_gcli_http_400_hides_sensitive_upstream_detail(self, mock_post):
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {
+            "error": {"message": "Authorization: Bearer local-password"}
+        }
+        mock_post.return_value = mock_response
+
+        _, message, _ = ApiTester.test_provider(
+            "http://127.0.0.1:8787", "local-password",
+            "claude-opus-4-6-thinking", auth_mode="bearer", provider_kind="gcli2api")
+
+        assert "local-password" not in message
+        assert "敏感" in message
+
+    @patch("app.api_tester.requests.post")
     def test_500_server_error(self, mock_post):
         """500 响应返回服务器错误"""
         mock_response = MagicMock()

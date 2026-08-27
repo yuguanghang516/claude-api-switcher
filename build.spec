@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
 PyInstaller 打包配置
-生成独立的 Claude API Switcher V4.3.1 可执行文件
+生成独立的 Claude API Switcher V4.3.2 可执行文件
 """
 
 block_cipher = None
@@ -44,7 +44,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='Claude API Switcher V4.3.1',
+    name='Claude API Switcher V4.3.2',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,8 +59,8 @@ exe = EXE(
     entitlements_file=None,
     icon='assets/app_icon.ico',
     version='version_info.txt',
-    product_name='Claude API Switcher V4.3.1',
-    product_version='4.3.1',
+    product_name='Claude API Switcher V4.3.2',
+    product_version='4.3.2',
     company_name='',
     copyright='',
     description='Claude Code API environment and local AI gateway manager',
