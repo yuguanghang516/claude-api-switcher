@@ -164,7 +164,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-V4.5.0 重点提升可靠性与日常舒适度：修复 Claude 云路由环境污染、gcli2api 并发启停与额度长时间阻塞、自动切换跨配置串线、损坏配置覆盖、Provider 优先级导入丢失、路由开关假状态和更新链接边界；同时改善暗色对比度、热力图字号、帮助提示、编辑对话框与中英文动态状态。完整说明见 [`docs/releases/v4.5.0-local.md`](docs/releases/v4.5.0-local.md)。
+V4.5.0 重点提升可靠性与日常舒适度：修复 Claude 云路由环境污染、gcli2api 并发启停与额度长时间阻塞、自动切换跨配置串线、损坏配置覆盖、Provider 优先级导入丢失、路由开关假状态和更新链接边界；同时改善暗色对比度、热力图字号、帮助提示、编辑对话框与中英文动态状态。完整说明见 [`docs/releases/v4.5.0.md`](docs/releases/v4.5.0.md)。
 
 ## 仓库边界
 
