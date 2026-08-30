@@ -134,6 +134,33 @@ def test_launcher_overrides_inherited_longcat_routing(tmp_path, monkeypatch):
     assert captured["command"][-2:] == ["--setting-sources", "local"]
 
 
+def test_launcher_removes_inherited_cloud_provider_selectors(tmp_path, monkeypatch):
+    captured = {}
+    claude_path = tmp_path / "claude.cmd"
+    claude_path.write_text("@echo off", encoding="utf-8")
+    selectors = (
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_VERTEX",
+    )
+    for name in selectors:
+        monkeypatch.setenv(name, "1")
+    monkeypatch.setattr(launcher_module.shutil, "which", _mock_which)
+    monkeypatch.setattr(
+        launcher_module.subprocess, "Popen",
+        lambda command, **kwargs: captured.update(command=command, **kwargs),
+    )
+
+    ok, _ = ClaudeLauncher.launch(
+        "Gemini", "http://127.0.0.1:8787", "local-password",
+        "claude-opus-4-6-thinking", "", str(tmp_path),
+        claude_path=str(claude_path), auth_mode="bearer",
+    )
+
+    assert ok is True
+    assert all(name not in captured["env"] for name in selectors)
+
+
 def test_launcher_chooses_clean_project_settings_when_local_has_old_route(tmp_path):
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()

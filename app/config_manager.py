@@ -12,6 +12,7 @@ import json
 import tempfile
 import copy
 import uuid
+from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 
@@ -61,27 +62,98 @@ class ConfigManager:
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
-                    self.config = json.load(f)
-                # 确保必要字段存在
-                if "providers" not in self.config:
-                    self.config["providers"] = DEFAULT_PROVIDERS
-                if "current_provider" not in self.config:
-                    self.config["current_provider"] = ""
-                if "default_project_dir" not in self.config:
-                    self.config["default_project_dir"] = ""
-                if "auto_failover" not in self.config:
-                    self.config["auto_failover"] = False
-                if "sync_claude" not in self.config:
-                    self.config["sync_claude"] = False
-                if "language" not in self.config:
-                    self.config["language"] = "zh"
-                if "theme" not in self.config:
-                    self.config["theme"] = "system"
-                self._normalize_providers()
-            except (json.JSONDecodeError, IOError):
+                    loaded = json.load(f)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                self._backup_corrupt_config()
                 self._create_default_config()
+                return
+            except OSError as exc:
+                # 权限、占用或磁盘故障不代表内容损坏，绝不能覆盖原文件。
+                raise IOError(f"读取配置失败: {exc}") from exc
+            if not self._is_valid_config_structure(loaded):
+                self._backup_corrupt_config()
+                self._create_default_config()
+                return
+            self.config = loaded
+            changed = self._apply_defaults()
+            changed = self._normalize_providers() or changed
+            if changed:
+                self._save_config()
         else:
             self._create_default_config()
+
+    @staticmethod
+    def _is_valid_config_structure(config: Any) -> bool:
+        """只接受可安全规范化的配置结构，避免合法 JSON 触发类型异常。"""
+        if not isinstance(config, dict):
+            return False
+
+        scalar_types = {
+            "current_provider": str,
+            "default_project_dir": str,
+            "auto_failover": bool,
+            "sync_claude": bool,
+            "language": str,
+            "theme": str,
+        }
+        for field, expected in scalar_types.items():
+            if field in config and not isinstance(config[field], expected):
+                return False
+
+        providers = config.get("providers", [])
+        if not isinstance(providers, list):
+            return False
+        string_fields = {
+            "id", "name", "base_url", "model", "small_fast_model",
+            "legacy_credential_name", "auth_mode", "provider_kind",
+        }
+        bool_fields = {"enabled", "is_fallback"}
+        for provider in providers:
+            if not isinstance(provider, dict):
+                return False
+            if any(field in provider and not isinstance(provider[field], str)
+                   for field in string_fields):
+                return False
+            if any(field in provider and not isinstance(provider[field], bool)
+                   for field in bool_fields):
+                return False
+            if "priority" in provider:
+                priority = provider["priority"]
+                if (not isinstance(priority, int) or isinstance(priority, bool)
+                        or not 1 <= priority <= 999):
+                    return False
+        return True
+
+    def _apply_defaults(self) -> bool:
+        """补齐旧配置缺少的顶层字段，并报告是否发生了修改。"""
+        defaults = {
+            "providers": copy.deepcopy(DEFAULT_PROVIDERS),
+            "current_provider": "",
+            "default_project_dir": "",
+            "auto_failover": False,
+            "sync_claude": False,
+            "language": "zh",
+            "theme": "system",
+        }
+        changed = False
+        for field, value in defaults.items():
+            if field not in self.config:
+                self.config[field] = value
+                changed = True
+        return changed
+
+    def _backup_corrupt_config(self) -> Optional[str]:
+        """把损坏配置移到带时间戳的备份文件，避免恢复默认时丢失现场。"""
+        if not os.path.isfile(self.config_file):
+            return None
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        backup_path = os.path.join(
+            self.data_dir, f"config.corrupt-{timestamp}.json")
+        try:
+            os.replace(self.config_file, backup_path)
+        except OSError as exc:
+            raise IOError(f"备份损坏配置失败: {exc}") from exc
+        return backup_path
 
     def _create_default_config(self):
         """创建默认配置"""
@@ -97,17 +169,26 @@ class ConfigManager:
         self._normalize_providers()
         self._save_config()
 
-    def _normalize_providers(self):
-        """补齐兼容字段；内部 ID 用于把凭据与显示名称解耦。"""
+    def _normalize_providers(self) -> bool:
+        """补齐兼容字段；返回是否修改，便于立即原子持久化旧 ID。"""
+        changed = False
         for provider in self.config.get("providers", []):
             if not provider.get("id"):
                 provider["id"] = uuid.uuid4().hex
                 provider["legacy_credential_name"] = provider.get("name", "")
-            provider.setdefault("auth_mode", "bearer")
-            provider.setdefault("provider_kind", "custom")
-            provider.setdefault("enabled", True)
-            provider.setdefault("priority", 99)
-            provider.setdefault("is_fallback", False)
+                changed = True
+            defaults = {
+                "auth_mode": "bearer",
+                "provider_kind": "custom",
+                "enabled": True,
+                "priority": 99,
+                "is_fallback": False,
+            }
+            for field, value in defaults.items():
+                if field not in provider:
+                    provider[field] = value
+                    changed = True
+        return changed
 
     def _save_config(self):
         """

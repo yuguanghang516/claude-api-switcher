@@ -20,7 +20,42 @@ def test_update_available(monkeypatch):
     result = update_checker.check_for_updates()
     assert result.status == "update_available"
     assert result.latest_version == "9.0.0"
-    assert result.release_url == "https://example.test/release"
+    assert result.release_url == update_checker.RELEASES_URL
+
+
+def test_update_accepts_only_own_github_release_url(monkeypatch):
+    release_url = (
+        "https://github.com/yuguanghang516/claude-api-switcher/"
+        "releases/tag/v9.0.0"
+    )
+    monkeypatch.setattr(
+        update_checker.requests, "get",
+        lambda *args, **kwargs: FakeResponse(200, {
+            "tag_name": "v9.0.0", "html_url": release_url
+        }),
+    )
+    assert update_checker.check_for_updates().release_url == release_url
+
+
+def test_update_rejects_lookalike_or_insecure_release_urls(monkeypatch):
+    unsafe_urls = [
+        "http://github.com/yuguanghang516/claude-api-switcher/releases/tag/v9.0.0",
+        "https://github.com.evil.test/yuguanghang516/claude-api-switcher/releases/tag/v9.0.0",
+        "https://github.com/other/claude-api-switcher/releases/tag/v9.0.0",
+        "https://github.com/yuguanghang516/claude-api-switcher/issues/1",
+        "https://user@github.com/yuguanghang516/claude-api-switcher/releases/tag/v9.0.0",
+        "https://github.com/yuguanghang516/claude-api-switcher/releases/tag/v9.0.0?download=1",
+        "https://github.com/yuguanghang516/claude-api-switcher/releases/../issues/1",
+        "https://github.com/yuguanghang516/claude-api-switcher/releases/%2e%2e/issues/1",
+    ]
+    for unsafe_url in unsafe_urls:
+        monkeypatch.setattr(
+            update_checker.requests, "get",
+            lambda *args, _url=unsafe_url, **kwargs: FakeResponse(200, {
+                "tag_name": "v9.0.0", "html_url": _url
+            }),
+        )
+        assert update_checker.check_for_updates().release_url == update_checker.RELEASES_URL
 
 
 def test_no_public_release_is_explained(monkeypatch):

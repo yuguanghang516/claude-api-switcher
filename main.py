@@ -16,6 +16,7 @@ import shutil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.gui import MainWindow
+from app.single_instance import SingleInstanceGuard
 from app.version import APP_VERSION_NAME
 
 
@@ -51,6 +52,9 @@ def migrate_legacy_config(base_dir: str, data_dir: str):
 
 def main():
     """主函数"""
+    instance_guard = SingleInstanceGuard()
+    if not instance_guard.acquire():
+        return
     base_dir = get_base_dir()
 
     state_dir = get_state_dir()
@@ -65,8 +69,11 @@ def main():
         os.makedirs(d, exist_ok=True)
 
     # 创建并运行主窗口
-    app = MainWindow(data_dir, logs_dir)
-    app.run()
+    try:
+        app = MainWindow(data_dir, logs_dir)
+        app.run()
+    finally:
+        instance_guard.release()
 
 
 if __name__ == "__main__":

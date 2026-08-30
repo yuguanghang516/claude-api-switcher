@@ -1,5 +1,8 @@
 from pathlib import Path
 from types import SimpleNamespace
+import io
+import subprocess
+import threading
 
 import pytest
 import requests
@@ -280,6 +283,69 @@ def test_model_quotas_reports_panel_password_mismatch(monkeypatch, manager):
     assert "密码" in snapshot.message
 
 
+def test_model_quotas_keeps_partial_results_with_bounded_concurrency(monkeypatch, manager):
+    filenames = [f"ag-{index}.json" for index in range(4)]
+    active = 0
+    max_active = 0
+    state_lock = threading.Lock()
+    two_started = threading.Event()
+
+    def fake_get(url, **kwargs):
+        nonlocal active, max_active
+        if url.endswith("/creds/status"):
+            return FakeResponse(200, {
+                "items": [{"filename": name, "disabled": False} for name in filenames]
+            })
+        filename = url.rsplit("/", 1)[-1]
+        with state_lock:
+            active += 1
+            max_active = max(max_active, active)
+            if active >= 2:
+                two_started.set()
+        two_started.wait(timeout=1)
+        try:
+            if filename == "ag-1.json":
+                raise requests.exceptions.Timeout()
+            return FakeResponse(200, {"models": {
+                "gemini-pro": {"remaining": 0.5, "resetTime": "soon"},
+            }})
+        finally:
+            with state_lock:
+                active -= 1
+
+    monkeypatch.setattr("app.gcli2api_manager.requests.get", fake_get)
+    snapshot = manager.get_model_quotas(
+        "panel-secret", max_workers=2, total_timeout=2, item_timeout=1)
+
+    assert snapshot.ok
+    assert snapshot.credential_count == 4
+    assert snapshot.failed_count == 1
+    assert "1 个凭证读取失败" in snapshot.message
+    assert snapshot.models[0].credential_count == 3
+    assert max_active == 2
+
+
+def test_detect_quota_fallback_uses_strict_small_budget(monkeypatch, manager):
+    seen = {}
+    monkeypatch.setattr(
+        "app.gcli2api_manager.requests.get",
+        lambda *args, **kwargs: FakeResponse(200, {"data": []}),
+    )
+
+    def fake_quotas(password, mode, **kwargs):
+        seen.update(password=password, mode=mode, **kwargs)
+        return SimpleNamespace(ok=False, models=())
+
+    monkeypatch.setattr(manager, "get_model_quotas", fake_quotas)
+    status = manager.detect("secret")
+
+    assert status.state == "oauth_required"
+    assert seen["total_timeout"] <= 4
+    assert seen["item_timeout"] <= 2
+    assert seen["max_workers"] <= 4
+    assert seen["max_credentials"] <= 12
+
+
 def test_examples_never_include_real_password(manager):
     examples = manager.generate_examples("gemini-test")
     assert set(examples) == {"anthropic", "openai", "gemini"}
@@ -480,6 +546,184 @@ def test_start_uses_argument_array_and_local_host(monkeypatch, manager):
     assert seen["shell"] is False
     assert seen["env"]["HOST"] == "127.0.0.1"
     assert "api-secret" not in " ".join(seen["args"])
+    assert seen["stdout"] == subprocess.PIPE
+    assert seen["stderr"] == subprocess.STDOUT
+
+
+def test_concurrent_start_creates_only_one_owned_process(monkeypatch, manager):
+    python = _make_managed_install(manager)
+    popen_calls = 0
+    call_lock = threading.Lock()
+
+    class FakeProcess:
+        pid = 321
+
+        def __init__(self):
+            self.args = [str(python), str(manager.install_dir / "web.py")]
+            self.stdout = io.StringIO("")
+            self.return_code = None
+
+        def poll(self):
+            return self.return_code
+
+        def terminate(self):
+            self.return_code = 0
+
+        def wait(self, timeout=None):
+            return self.return_code
+
+    process = FakeProcess()
+
+    def fake_popen(*_args, **_kwargs):
+        nonlocal popen_calls
+        with call_lock:
+            popen_calls += 1
+        return process
+
+    monkeypatch.setattr("app.gcli2api_manager.subprocess.Popen", fake_popen)
+    barrier = threading.Barrier(8)
+    results = []
+
+    def start_once():
+        barrier.wait(timeout=2)
+        results.append(manager.start("api-secret", "panel-secret"))
+
+    threads = [threading.Thread(target=start_once) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert popen_calls == 1
+    assert len(results) == 8 and all(result[0] for result in results)
+    assert manager._managed_process is process
+
+
+def test_start_and_wait_timeout_stops_only_process_created_by_call(monkeypatch, manager):
+    python = _make_managed_install(manager)
+    stopped = _startup_status(manager, "stopped")
+    monkeypatch.setattr(manager, "detect", lambda *_args: stopped)
+
+    class FakeProcess:
+        pid = 654
+
+        def __init__(self):
+            self.args = [str(python), str(manager.install_dir / "web.py")]
+            self.stdout = io.StringIO("")
+            self.return_code = None
+            self.terminate_calls = 0
+
+        def poll(self):
+            return self.return_code
+
+        def terminate(self):
+            self.terminate_calls += 1
+            self.return_code = 0
+
+        def wait(self, timeout=None):
+            return self.return_code
+
+    process = FakeProcess()
+    monkeypatch.setattr(
+        "app.gcli2api_manager.subprocess.Popen", lambda *_args, **_kwargs: process)
+
+    ok, message, _ = manager.start_and_wait(
+        "api-secret", "panel-secret", timeout=0, poll_interval=0)
+
+    assert not ok
+    assert process.terminate_calls == 1
+    assert manager._managed_process is None
+    assert "已停止本次启动的进程" in message
+
+
+def test_stop_releases_lifecycle_lock_while_reader_drains(monkeypatch, manager):
+    python = _make_managed_install(manager)
+    terminated = threading.Event()
+    reader_drained = threading.Event()
+    manager.logger = SimpleNamespace(debug=lambda _line: reader_drained.set())
+
+    class BlockingStream:
+        def __init__(self):
+            self.sent = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self.sent:
+                raise StopIteration
+            assert terminated.wait(timeout=1)
+            self.sent = True
+            return "shutdown complete\n"
+
+        def close(self):
+            pass
+
+    class FakeProcess:
+        pid = 777
+
+        def __init__(self):
+            self.args = [str(python), str(manager.install_dir / "web.py")]
+            self.stdout = BlockingStream()
+            self.return_code = None
+
+        def poll(self):
+            return self.return_code
+
+        def terminate(self):
+            terminated.set()
+
+        def wait(self, timeout=None):
+            assert reader_drained.wait(timeout=1), "reader could not drain during stop"
+            self.return_code = 0
+            return 0
+
+    process = FakeProcess()
+    monkeypatch.setattr(
+        "app.gcli2api_manager.subprocess.Popen", lambda *_args, **_kwargs: process)
+    assert manager.start("api-secret", "panel-secret")[0]
+
+    ok, message = manager.stop_managed()
+
+    assert ok and "已停止" in message
+    assert reader_drained.is_set()
+    assert manager._managed_process is None
+    assert manager._managed_reader_thread is None
+
+
+def test_managed_process_output_is_bounded_redacted_and_reported(monkeypatch, manager):
+    python = _make_managed_install(manager)
+    stopped = _startup_status(manager, "stopped")
+    monkeypatch.setattr(manager, "detect", lambda *_args: stopped)
+    debug_lines = []
+    manager.logger = SimpleNamespace(debug=debug_lines.append)
+
+    class FakeProcess:
+        pid = 987
+
+        def __init__(self):
+            self.args = [str(python), str(manager.install_dir / "web.py")]
+            self.stdout = io.StringIO(
+                "boot api-secret panel-secret Authorization: Bearer upstream-token\n")
+
+        def poll(self):
+            return 7
+
+    process = FakeProcess()
+    monkeypatch.setattr(
+        "app.gcli2api_manager.subprocess.Popen", lambda *_args, **_kwargs: process)
+
+    ok, message, _ = manager.start_and_wait(
+        "api-secret", "panel-secret", timeout=1, poll_interval=0)
+
+    assert not ok and "退出码 7" in message
+    assert "最后日志" in message
+    combined = "\n".join(debug_lines + list(manager._recent_process_logs) + [message])
+    assert "api-secret" not in combined
+    assert "panel-secret" not in combined
+    assert "upstream-token" not in combined
+    assert "[REDACTED]" in combined
+    assert all(len(line) <= 500 for line in manager._recent_process_logs)
 
 
 def test_start_rejects_remote_service(tmp_path):

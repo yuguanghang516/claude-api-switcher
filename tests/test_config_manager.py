@@ -4,6 +4,8 @@ ConfigManager 单元测试
 """
 import os
 import json
+import builtins
+from pathlib import Path
 import pytest
 from app.config_manager import ConfigManager, DEFAULT_PROVIDERS
 
@@ -86,6 +88,72 @@ class TestAtomicWrite:
         # 重新初始化应恢复默认
         config = ConfigManager(data_dir)
         assert len(config.get_providers()) >= 1
+        backups = list(Path(data_dir).glob("config.corrupt-*.json"))
+        assert len(backups) == 1
+        assert backups[0].read_text(encoding="utf-8") == "{broken json!!!"
+
+    @pytest.mark.parametrize("payload", [
+        [],
+        {"providers": {}},
+        {"providers": ["not-a-provider"]},
+        {"providers": [{"name": "Bad", "priority": "first"}]},
+        {"providers": [{"name": "Bad", "priority": 0}]},
+        {"providers": [{"name": "Bad", "priority": 1000}]},
+        {"providers": [{"name": "Bad", "priority": True}]},
+        {"providers": [], "theme": []},
+    ])
+    def test_structurally_invalid_json_is_backed_up_and_rebuilt(self, data_dir, payload):
+        config_file = Path(data_dir) / "config.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        config_file.write_text(json.dumps(payload), encoding="utf-8")
+
+        config = ConfigManager(data_dir)
+
+        assert config.get_provider("LongCat") is not None
+        backups = list(Path(data_dir).glob("config.corrupt-*.json"))
+        assert len(backups) == 1
+        assert json.loads(backups[0].read_text(encoding="utf-8")) == payload
+
+    def test_legacy_provider_id_is_persisted_and_stable_across_loads(self, data_dir):
+        config_file = Path(data_dir) / "config.json"
+        config_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy = {
+            "providers": [{
+                "name": "Legacy",
+                "base_url": "https://legacy.example.com",
+                "model": "legacy-model",
+            }],
+        }
+        config_file.write_text(json.dumps(legacy), encoding="utf-8")
+
+        first = ConfigManager(data_dir)
+        first_id = first.get_provider("Legacy")["id"]
+        on_disk = json.loads(config_file.read_text(encoding="utf-8"))
+        assert on_disk["providers"][0]["id"] == first_id
+        assert on_disk["providers"][0]["legacy_credential_name"] == "Legacy"
+
+        second = ConfigManager(data_dir)
+        assert second.get_provider("Legacy")["id"] == first_id
+        assert json.loads(config_file.read_text(encoding="utf-8")) == on_disk
+
+    def test_read_io_error_preserves_original_config(self, data_dir, monkeypatch):
+        existing = ConfigManager(data_dir)
+        config_file = Path(existing.config_file)
+        original = config_file.read_bytes()
+        original_open = builtins.open
+
+        def deny_config_read(path, mode="r", *args, **kwargs):
+            if (os.path.abspath(os.fspath(path)) == os.path.abspath(existing.config_file)
+                    and "r" in mode):
+                raise PermissionError("access denied")
+            return original_open(path, mode, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", deny_config_read)
+        with pytest.raises(IOError, match="读取配置失败"):
+            ConfigManager(data_dir)
+
+        assert config_file.read_bytes() == original
+        assert not list(config_file.parent.glob("config.corrupt-*.json"))
 
 
 class TestProviderCRUD:

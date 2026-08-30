@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 import re
+import posixpath
+from urllib.parse import unquote, urlsplit
 
 import requests
 
@@ -27,6 +29,31 @@ class UpdateCheckResult:
 def _version_tuple(value: str):
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?", value.strip())
     return tuple(map(int, match.groups())) if match else None
+
+
+def _safe_release_url(value: object) -> str:
+    """仅允许打开本仓库的 HTTPS Release 页面。"""
+    if not isinstance(value, str):
+        return RELEASES_URL
+    try:
+        parsed = urlsplit(value.strip())
+        path = posixpath.normpath(unquote(parsed.path)).rstrip("/").lower()
+        releases_path = "/yuguanghang516/claude-api-switcher/releases"
+        if (
+            parsed.scheme.lower() == "https"
+            and parsed.hostname
+            and parsed.hostname.lower() == "github.com"
+            and not parsed.username
+            and not parsed.password
+            and parsed.port in (None, 443)
+            and not parsed.query
+            and not parsed.fragment
+            and (path == releases_path or path.startswith(f"{releases_path}/"))
+        ):
+            return value.strip()
+    except (TypeError, ValueError):
+        pass
+    return RELEASES_URL
 
 
 def check_for_updates(timeout: float = 8.0) -> UpdateCheckResult:
@@ -57,7 +84,7 @@ def check_for_updates(timeout: float = 8.0) -> UpdateCheckResult:
         return UpdateCheckResult("server_error", message="GitHub 返回内容无法解析")
 
     latest = str(payload.get("tag_name") or "").strip()
-    release_url = str(payload.get("html_url") or RELEASES_URL).strip()
+    release_url = _safe_release_url(payload.get("html_url"))
     current_tuple = _version_tuple(APP_VERSION)
     latest_tuple = _version_tuple(latest)
     if not latest_tuple or not current_tuple:

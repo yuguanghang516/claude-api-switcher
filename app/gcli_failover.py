@@ -19,6 +19,19 @@ class GcliFailoverEvent:
     timestamp: int = 0
 
 
+@dataclass(frozen=True)
+class _GcliFailoverSnapshot:
+    """One immutable routing generation used for an entire forwarded request."""
+
+    generation: int
+    base_url: str
+    api_key: str
+    models: Tuple[str, ...]
+    quota: Tuple[Tuple[str, float], ...]
+    preferred: str
+    cooldown_until: Tuple[Tuple[str, float], ...]
+
+
 class GcliModelFailover:
     """Select gcli2api models using quota hints and authoritative 429 results."""
 
@@ -38,6 +51,7 @@ class GcliModelFailover:
         self._cooldown_until: Dict[str, float] = {}
         self._rate_limit_count: Dict[str, int] = {}
         self._last_event = GcliFailoverEvent()
+        self._generation = 0
 
     def configure(self, base_url: str, api_key: str, models: Iterable[str],
                   quota_percent: Optional[Mapping[str, float]] = None,
@@ -53,6 +67,7 @@ class GcliModelFailover:
             if model and is_text_model and not incompatible and model not in clean:
                 clean.append(model)
         with self._lock:
+            self._generation += 1
             self._base_url = str(base_url or "").strip().rstrip("/")
             self._api_key = str(api_key or "")
             self._models = tuple(clean)
@@ -98,36 +113,57 @@ class GcliModelFailover:
                 return family
         return "other"
 
-    def candidates(self, requested_model: str = "") -> List[str]:
-        now = self._clock()
+    def _snapshot(self) -> _GcliFailoverSnapshot:
         with self._lock:
-            available = [
-                model for model in self._models
-                if self._cooldown_until.get(model, 0) <= now
-            ]
-            preferred = requested_model if requested_model in available else self._preferred
-            preferred_family = self._family(preferred or requested_model)
-            return sorted(
-                available,
-                key=lambda model: (
-                    0 if model == preferred else 1,
-                    0 if self._family(model) == preferred_family else 1,
-                    -self._quota.get(model, -1),
-                    self._capability_rank(model),
-                    model.lower(),
-                ),
+            return _GcliFailoverSnapshot(
+                generation=self._generation,
+                base_url=self._base_url,
+                api_key=self._api_key,
+                models=self._models,
+                quota=tuple(self._quota.items()),
+                preferred=self._preferred,
+                cooldown_until=tuple(self._cooldown_until.items()),
             )
 
-    def report_rate_limit(self, model: str) -> int:
+    def _candidates_from_snapshot(self, snapshot: _GcliFailoverSnapshot,
+                                  requested_model: str, now: float) -> List[str]:
+        quota = dict(snapshot.quota)
+        cooldown_until = dict(snapshot.cooldown_until)
+        available = [
+            model for model in snapshot.models
+            if cooldown_until.get(model, 0) <= now
+        ]
+        preferred = requested_model if requested_model in available else snapshot.preferred
+        preferred_family = self._family(preferred or requested_model)
+        return sorted(
+            available,
+            key=lambda model: (
+                0 if model == preferred else 1,
+                0 if self._family(model) == preferred_family else 1,
+                -quota.get(model, -1),
+                self._capability_rank(model),
+                model.lower(),
+            ),
+        )
+
+    def candidates(self, requested_model: str = "") -> List[str]:
+        snapshot = self._snapshot()
+        return self._candidates_from_snapshot(snapshot, requested_model, self._clock())
+
+    def report_rate_limit(self, model: str, generation: Optional[int] = None) -> int:
         with self._lock:
+            if generation is not None and generation != self._generation:
+                return 0
             count = self._rate_limit_count.get(model, 0) + 1
             self._rate_limit_count[model] = count
             seconds = min(240, 60 * (2 ** (count - 1)))
             self._cooldown_until[model] = self._clock() + seconds
             return seconds
 
-    def report_success(self, model: str) -> None:
+    def report_success(self, model: str, generation: Optional[int] = None) -> None:
         with self._lock:
+            if generation is not None and generation != self._generation:
+                return
             self._rate_limit_count.pop(model, None)
             self._cooldown_until.pop(model, None)
 
@@ -150,20 +186,20 @@ class GcliModelFailover:
 
     def forward(self, payload: Dict, stream: bool = False) -> Tuple[requests.Response, str]:
         """Try up to three distinct models; streaming switches only before bytes are exposed."""
-        with self._lock:
-            base_url = self._base_url
-            api_key = self._api_key
-        if not base_url or not api_key:
+        snapshot = self._snapshot()
+        if not snapshot.base_url or not snapshot.api_key:
             raise RuntimeError("Gemini 自动切换尚未配置")
         requested = str(payload.get("model") or "")
-        candidates = self.candidates(requested)[:self.max_models]
+        candidates = self._candidates_from_snapshot(
+            snapshot, requested, self._clock())[:self.max_models]
         if not candidates:
             raise RuntimeError("所有 Gemini 候选模型均在冷却中")
-        url = base_url if base_url.endswith("/v1/messages") else f"{base_url}/v1/messages"
+        url = (snapshot.base_url if snapshot.base_url.endswith("/v1/messages")
+               else f"{snapshot.base_url}/v1/messages")
         headers = {
             "Content-Type": "application/json",
             "Accept": "text/event-stream" if stream else "application/json",
-            "x-api-key": api_key,
+            "x-api-key": snapshot.api_key,
             "anthropic-version": "2023-06-01",
         }
         last_response = None
@@ -191,15 +227,16 @@ class GcliModelFailover:
             last_response = response
             last_model = model
             if response.status_code == 200:
-                self.report_success(model)
+                self.report_success(model, snapshot.generation)
                 if model != first_model:
                     with self._lock:
-                        self._last_event = GcliFailoverEvent(
-                            from_model=first_model, to_model=model,
-                            reason="429 额度耗尽后自动切换", timestamp=int(time.time()))
+                        if snapshot.generation == self._generation:
+                            self._last_event = GcliFailoverEvent(
+                                from_model=first_model, to_model=model,
+                                reason="429 额度耗尽后自动切换", timestamp=int(time.time()))
                 return response, model
             if response.status_code == 429:
-                self.report_rate_limit(model)
+                self.report_rate_limit(model, snapshot.generation)
                 continue
             if response.status_code >= 500:
                 continue

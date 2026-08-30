@@ -13,7 +13,7 @@ from .credential_manager import CredentialManager
 
 EXPORT_FIELDS = (
     "name", "base_url", "model", "small_fast_model", "enabled", "auth_mode",
-    "provider_kind",
+    "provider_kind", "priority",
 )
 
 
@@ -60,7 +60,8 @@ class ProviderManager:
             return False, "远程 API 地址必须使用 HTTPS"
         if not model.strip():
             return False, "模型名称不能为空"
-        if not isinstance(priority, int) or not 1 <= priority <= 999:
+        if (not isinstance(priority, int) or isinstance(priority, bool)
+                or not 1 <= priority <= 999):
             return False, "优先级必须是 1–999 的整数"
         return True, ""
 
@@ -235,7 +236,7 @@ class ProviderManager:
                 if not isinstance(item, dict):
                     return False, "Provider 数据格式无效"
                 name = str(item.get("name", "")).strip()
-                priority = 99
+                priority = item["priority"] if "priority" in item else 99
                 ok, message = self._validate_fields(
                     name, str(item.get("base_url", "")), str(item.get("model", "")), priority)
                 if not ok or name in names:

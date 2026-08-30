@@ -107,6 +107,11 @@ class ClaudeLauncher:
             "ANTHROPIC_MODEL", "ANTHROPIC_SMALL_FAST_MODEL",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL",
             "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            # Claude Code provider selectors override Anthropic-compatible API
+            # routing altogether.  They must not leak from the parent process
+            # into a session launched for Gemini, LongCat, or another API.
+            "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY",
+            "CLAUDE_CODE_USE_VERTEX",
         ):
             child_env.pop(name, None)
         credential_env = (

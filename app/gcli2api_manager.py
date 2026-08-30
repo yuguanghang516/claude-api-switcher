@@ -7,8 +7,11 @@ import json
 import re
 import shutil
 import subprocess
+import threading
 import time
 import webbrowser
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -31,6 +34,16 @@ SUPPORTED_MODES = (MODE_ANTIGRAVITY, MODE_GEMINI_CLI)
 MAX_IMPORT_FILES = 20
 MAX_IMPORT_FILE_BYTES = 2 * 1024 * 1024
 MAX_IMPORT_TOTAL_BYTES = 10 * 1024 * 1024
+QUOTA_MAX_CREDENTIALS = 100
+QUOTA_MAX_WORKERS = 6
+QUOTA_ITEM_TIMEOUT = 6.0
+QUOTA_TOTAL_TIMEOUT = 30.0
+DETECT_QUOTA_MAX_CREDENTIALS = 12
+DETECT_QUOTA_MAX_WORKERS = 4
+DETECT_QUOTA_ITEM_TIMEOUT = 2.0
+DETECT_QUOTA_TOTAL_TIMEOUT = 4.0
+PROCESS_LOG_MAX_LINES = 40
+PROCESS_LOG_LINE_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -75,6 +88,7 @@ class GcliQuotaSnapshot:
     credential_count: int = 0
     message: str = ""
     fetched_at: int = 0
+    failed_count: int = 0
 
 
 class Gcli2ApiManager:
@@ -94,8 +108,15 @@ class Gcli2ApiManager:
         self.logger = logger
         self.request_timeout = request_timeout
         self.auto_discover = auto_discover
+        self._process_lock = threading.RLock()
+        self._process_local = threading.local()
         self._managed_process: Optional[subprocess.Popen] = None
         self._managed_executable = ""
+        self._process_generation = 0
+        self._managed_reader_thread: Optional[threading.Thread] = None
+        self._managed_reader_process: Optional[subprocess.Popen] = None
+        self._stopping_process: Optional[subprocess.Popen] = None
+        self._recent_process_logs = deque(maxlen=PROCESS_LOG_MAX_LINES)
         if auto_discover:
             self.refresh_install_dir()
 
@@ -553,68 +574,137 @@ class Gcli2ApiManager:
             errors=result_errors,
         )
 
-    def get_model_quotas(self, panel_password: str,
-                         mode: str = MODE_ANTIGRAVITY) -> GcliQuotaSnapshot:
-        """Read per-model quota snapshots without treating them as live availability."""
+    def _fetch_credential_quota(self, filename: str, headers: Dict[str, str], mode: str,
+                                deadline: float, item_timeout: float
+                                ) -> Optional[Dict[str, object]]:
+        """Fetch one credential without allowing it to outlive the shared budget."""
+        remaining_budget = deadline - time.monotonic()
+        if remaining_budget <= 0:
+            return None
+        timeout = max(0.1, min(item_timeout, remaining_budget))
+        try:
+            response = requests.get(
+                f"{self.base_url}/creds/quota/{quote(filename, safe='')}",
+                headers=headers, params={"mode": mode}, timeout=timeout,
+                allow_redirects=False,
+            )
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+        except (requests.exceptions.RequestException, ValueError, TypeError):
+            return None
+        models = payload.get("models", {}) if isinstance(payload, dict) else {}
+        return models if isinstance(models, dict) and models else None
+
+    def get_model_quotas(self, panel_password: str, mode: str = MODE_ANTIGRAVITY,
+                         *, total_timeout: float = QUOTA_TOTAL_TIMEOUT,
+                         item_timeout: float = QUOTA_ITEM_TIMEOUT,
+                         max_workers: int = QUOTA_MAX_WORKERS,
+                         max_credentials: int = QUOTA_MAX_CREDENTIALS,
+                         ) -> GcliQuotaSnapshot:
+        """Read quota snapshots within one budget and retain partial successes."""
         mode = self.normalize_mode(mode)
-        now = int(time.time())
+        fetched_at = int(time.time())
         if mode != MODE_ANTIGRAVITY:
-            return GcliQuotaSnapshot(False, message="逐模型额度仅支持 Antigravity 模式", fetched_at=now)
+            return GcliQuotaSnapshot(
+                False, message="逐模型额度仅支持 Antigravity 模式", fetched_at=fetched_at)
         if not panel_password:
-            return GcliQuotaSnapshot(False, message="请先填写本地 API 密码", fetched_at=now)
+            return GcliQuotaSnapshot(
+                False, message="请先填写本地 API 密码", fetched_at=fetched_at)
+
+        budget = max(0.1, float(total_timeout))
+        per_item_timeout = max(0.1, float(item_timeout))
+        worker_count = max(1, int(max_workers))
+        credential_limit = max(1, int(max_credentials))
+        deadline = time.monotonic() + budget
         headers = {"Authorization": f"Bearer {panel_password}", "Accept": "application/json"}
         try:
+            status_timeout = max(
+                0.1, min(float(self.request_timeout), deadline - time.monotonic()))
             status_response = requests.get(
                 f"{self.base_url}/creds/status", headers=headers,
-                params={"offset": 0, "limit": 100, "status_filter": "enabled", "mode": mode},
-                timeout=max(self.request_timeout, 15), allow_redirects=False,
+                params={"offset": 0, "limit": QUOTA_MAX_CREDENTIALS,
+                        "status_filter": "enabled", "mode": mode},
+                timeout=status_timeout, allow_redirects=False,
             )
             if status_response.status_code in {401, 403}:
-                return GcliQuotaSnapshot(False, message="面板密码不匹配", fetched_at=now)
+                return GcliQuotaSnapshot(
+                    False, message="面板密码不匹配", fetched_at=fetched_at)
             if status_response.status_code != 200:
                 return GcliQuotaSnapshot(
-                    False, message=f"凭证列表返回 HTTP {status_response.status_code}", fetched_at=now)
+                    False, message=f"凭证列表返回 HTTP {status_response.status_code}",
+                    fetched_at=fetched_at)
             payload = status_response.json()
-            items = payload.get("items", []) if isinstance(payload, dict) else []
-            filenames = [
-                str(item.get("filename") or "") for item in items
-                if isinstance(item, dict) and not item.get("disabled")
-                and str(item.get("filename") or "").lower().endswith(".json")
-            ]
-            aggregate: Dict[str, Dict[str, object]] = {}
-            for filename in filenames[:100]:
-                quota_response = requests.get(
-                    f"{self.base_url}/creds/quota/{quote(filename, safe='')}",
-                    headers=headers, params={"mode": mode},
-                    timeout=max(self.request_timeout, 30), allow_redirects=False,
-                )
-                if quota_response.status_code != 200:
-                    continue
-                quota_payload = quota_response.json()
-                models = quota_payload.get("models", {}) if isinstance(quota_payload, dict) else {}
-                if not isinstance(models, dict):
-                    continue
-                for model, info in models.items():
-                    if not isinstance(info, dict) or not str(model).strip():
-                        continue
-                    try:
-                        remaining = max(0.0, min(1.0, float(info.get("remaining"))))
-                    except (TypeError, ValueError):
-                        continue
-                    entry = aggregate.setdefault(str(model), {
-                        "remaining": remaining, "reset": "", "reset_raw": "", "count": 0,
-                    })
-                    entry["count"] = int(entry["count"]) + 1
-                    if remaining >= float(entry["remaining"]):
-                        entry["remaining"] = remaining
-                        entry["reset"] = str(info.get("resetTime") or "")
-                        entry["reset_raw"] = str(info.get("resetTimeRaw") or "")
         except requests.exceptions.Timeout:
-            return GcliQuotaSnapshot(False, message="额度查询超时", fetched_at=now)
+            return GcliQuotaSnapshot(False, message="额度查询超时", fetched_at=fetched_at)
         except requests.exceptions.ConnectionError:
-            return GcliQuotaSnapshot(False, message="无法连接 gcli2api；请先启动服务", fetched_at=now)
+            return GcliQuotaSnapshot(
+                False, message="无法连接 gcli2api；请先启动服务", fetched_at=fetched_at)
         except (requests.exceptions.RequestException, ValueError, TypeError):
-            return GcliQuotaSnapshot(False, message="无法读取额度数据", fetched_at=now)
+            return GcliQuotaSnapshot(False, message="无法读取额度数据", fetched_at=fetched_at)
+
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        filenames: List[str] = []
+        seen = set()
+        for item in items:
+            filename = str(item.get("filename") or "") if isinstance(item, dict) else ""
+            if (not isinstance(item, dict) or item.get("disabled")
+                    or not filename.lower().endswith(".json") or filename in seen):
+                continue
+            seen.add(filename)
+            filenames.append(filename)
+
+        selected = filenames[:credential_limit]
+        failed_count = len(filenames) - len(selected)
+        aggregate: Dict[str, Dict[str, object]] = {}
+        executor: Optional[ThreadPoolExecutor] = None
+        future_names: Dict[Future, str] = {}
+        try:
+            if selected and time.monotonic() < deadline:
+                executor = ThreadPoolExecutor(
+                    max_workers=min(worker_count, len(selected)),
+                    thread_name_prefix="gcli-quota",
+                )
+                future_names = {
+                    executor.submit(
+                        self._fetch_credential_quota, filename, headers, mode,
+                        deadline, per_item_timeout,
+                    ): filename
+                    for filename in selected
+                }
+                remaining_budget = max(0.0, deadline - time.monotonic())
+                done, pending = wait(tuple(future_names), timeout=remaining_budget)
+                failed_count += len(pending)
+                for future in pending:
+                    future.cancel()
+                for future in done:
+                    try:
+                        quota_models = future.result()
+                    except Exception:
+                        quota_models = None
+                    if not quota_models:
+                        failed_count += 1
+                        continue
+                    for model, info in quota_models.items():
+                        if not isinstance(info, dict) or not str(model).strip():
+                            continue
+                        try:
+                            remaining = max(0.0, min(1.0, float(info.get("remaining"))))
+                        except (TypeError, ValueError):
+                            continue
+                        entry = aggregate.setdefault(str(model), {
+                            "remaining": remaining, "reset": "", "reset_raw": "", "count": 0,
+                        })
+                        entry["count"] = int(entry["count"]) + 1
+                        if remaining >= float(entry["remaining"]):
+                            entry["remaining"] = remaining
+                            entry["reset"] = str(info.get("resetTime") or "")
+                            entry["reset_raw"] = str(info.get("resetTimeRaw") or "")
+            else:
+                failed_count += len(selected)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
 
         models = tuple(sorted((
             GcliModelQuota(
@@ -623,17 +713,25 @@ class Gcli2ApiManager:
                 credential_count=int(info["count"]),
             ) for model, info in aggregate.items()
         ), key=lambda item: (-item.remaining_percent, item.model.lower())))
+        partial = f" · {failed_count} 个凭证读取失败" if failed_count else ""
         if not models:
             return GcliQuotaSnapshot(
-                False, credential_count=len(filenames), message="没有可用的 Antigravity 额度数据",
-                fetched_at=now)
+                False, credential_count=len(filenames), failed_count=failed_count,
+                message=f"没有可用的 Antigravity 额度数据{partial}", fetched_at=fetched_at)
         return GcliQuotaSnapshot(
-            True, models=models, credential_count=len(filenames),
-            message=f"{len(filenames)} 个凭证 · {len(models)} 个模型", fetched_at=now)
+            True, models=models, credential_count=len(filenames), failed_count=failed_count,
+            message=f"{len(filenames)} 个凭证 · {len(models)} 个模型{partial}",
+            fetched_at=fetched_at)
 
     def _antigravity_quota_models(self, api_password: str) -> Tuple[str, ...]:
-        """Use gcli2api's authenticated quota API when its model-list call is empty."""
-        snapshot = self.get_model_quotas(api_password, MODE_ANTIGRAVITY)
+        """Use a strictly bounded quota fallback when the model list is empty."""
+        snapshot = self.get_model_quotas(
+            api_password, MODE_ANTIGRAVITY,
+            total_timeout=DETECT_QUOTA_TOTAL_TIMEOUT,
+            item_timeout=DETECT_QUOTA_ITEM_TIMEOUT,
+            max_workers=DETECT_QUOTA_MAX_WORKERS,
+            max_credentials=DETECT_QUOTA_MAX_CREDENTIALS,
+        )
         return self.clean_claude_models(
             tuple(item.model for item in snapshot.models)
         ) if snapshot.ok else ()
@@ -719,38 +817,158 @@ class Gcli2ApiManager:
         )), primary)
         return primary, fast
 
-    def start(self, api_password: str = "", panel_password: str = "") -> Tuple[bool, str]:
-        if not self.is_local:
-            return False, "远程 gcli2api 只能连接，不能由本软件启动"
-        self.refresh_install_dir()
-        target = self._safe_install_dir()
-        if self.install_dir != self.managed_install_dir:
-            target = self.install_dir
-        python_exe = target / ".venv" / "Scripts" / "python.exe"
-        web_file = target / "web.py"
-        if not python_exe.is_file() or not web_file.is_file():
-            return False, "gcli2api 未完整安装，请先执行安装"
-        if self._managed_process and self._managed_process.poll() is None:
-            return True, f"gcli2api 已由本软件启动（PID {self._managed_process.pid}）"
-        parsed = urlparse(self.base_url)
-        child_env = os.environ.copy()
-        child_env["HOST"] = "127.0.0.1"
-        child_env["PORT"] = str(parsed.port or 7861)
-        if api_password:
-            child_env["API_PASSWORD"] = api_password
-        if panel_password:
-            child_env["PANEL_PASSWORD"] = panel_password
+    def _start_output_reader(self, process: subprocess.Popen, generation: int,
+                             secrets: Iterable[str]) -> None:
+        """Drain one owned process pipe and retain only bounded, redacted lines."""
+        stream = getattr(process, "stdout", None)
+        if stream is None:
+            self._managed_reader_thread = None
+            self._managed_reader_process = None
+            return
+        secret_values = tuple(str(value) for value in secrets if value)
+
+        def read_output():
+            try:
+                for raw_line in stream:
+                    line = self._redact(raw_line, secret_values).strip()
+                    if not line:
+                        continue
+                    line = line[:PROCESS_LOG_LINE_LIMIT]
+                    with self._process_lock:
+                        if generation != self._process_generation:
+                            continue
+                        self._recent_process_logs.append(line)
+                    if self.logger:
+                        try:
+                            self.logger.debug(f"gcli2api: {line}")
+                        except Exception:
+                            pass
+            except (OSError, ValueError, TypeError):
+                pass
+            finally:
+                try:
+                    stream.close()
+                except (OSError, ValueError, AttributeError):
+                    pass
+
+        reader = threading.Thread(
+            target=read_output, daemon=True,
+            name=f"gcli2api-output-{getattr(process, 'pid', 'unknown')}",
+        )
+        self._managed_reader_thread = reader
+        self._managed_reader_process = process
+        reader.start()
+
+    def _last_process_log(self) -> str:
+        with self._process_lock:
+            return self._recent_process_logs[-1] if self._recent_process_logs else ""
+
+    def _safe_log_suffix(self) -> str:
+        line = self._last_process_log()
+        return f"；最后日志：{line}" if line else ""
+
+    def _join_output_reader(self, process: subprocess.Popen, timeout: float = 0.2) -> None:
+        with self._process_lock:
+            reader = (self._managed_reader_thread
+                      if self._managed_reader_process is process else None)
+        if reader and reader is not threading.current_thread() and reader.is_alive():
+            reader.join(timeout=max(0.0, timeout))
+        if reader and not reader.is_alive():
+            with self._process_lock:
+                if (self._managed_reader_thread is reader
+                        and self._managed_reader_process is process):
+                    self._managed_reader_thread = None
+                    self._managed_reader_process = None
+
+    def _clear_owned_process(self, process: subprocess.Popen) -> None:
+        """Forget only the process whose identity was checked by the caller."""
+        with self._process_lock:
+            if self._managed_process is process:
+                self._managed_process = None
+                self._managed_executable = ""
+
+    def _stop_owned_process(self, process: subprocess.Popen) -> Tuple[bool, str]:
+        """Stop one exact owned process without ever targeting an external service."""
+        with self._process_lock:
+            if self._managed_process is not process:
+                return False, "进程已不再由本软件管理"
+            if self._stopping_process is process:
+                return False, "gcli2api 正在停止"
+            args = process.args if isinstance(process.args, (list, tuple)) else []
+            if not args or str(Path(str(args[0])).resolve()) != self._managed_executable:
+                return False, "进程身份不匹配，已拒绝停止"
+            if process.poll() is not None:
+                self._clear_owned_process(process)
+                already_ended = True
+            else:
+                already_ended = False
+            if not already_ended:
+                self._stopping_process = process
+
+        if already_ended:
+            self._join_output_reader(process)
+            return True, "gcli2api 进程已经结束"
+
+        error = ""
         try:
-            process = subprocess.Popen(
-                [str(python_exe), str(web_file)], cwd=str(target), env=child_env,
-                shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, creationflags=self._creation_flags(),
-            )
+            process.terminate()
+            process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            error = "gcli2api 未在规定时间内退出；未强制结束进程"
         except OSError as exc:
-            return False, f"启动 gcli2api 失败：{self._redact(str(exc), (api_password, panel_password))}"
-        self._managed_process = process
-        self._managed_executable = str(python_exe.resolve())
-        return True, f"gcli2api 正在启动（PID {process.pid}）"
+            error = f"停止失败：{self._redact(str(exc))}"
+        finally:
+            with self._process_lock:
+                if process.poll() is not None:
+                    self._clear_owned_process(process)
+                if self._stopping_process is process:
+                    self._stopping_process = None
+            if process.poll() is not None:
+                self._join_output_reader(process)
+        return (False, error) if error else (True, "已停止由本软件启动的 gcli2api")
+
+    def start(self, api_password: str = "", panel_password: str = "") -> Tuple[bool, str]:
+        self._process_local.started_process = None
+        with self._process_lock:
+            if not self.is_local:
+                return False, "远程 gcli2api 只能连接，不能由本软件启动"
+            self.refresh_install_dir()
+            target = self._safe_install_dir()
+            if self.install_dir != self.managed_install_dir:
+                target = self.install_dir
+            python_exe = target / ".venv" / "Scripts" / "python.exe"
+            web_file = target / "web.py"
+            if not python_exe.is_file() or not web_file.is_file():
+                return False, "gcli2api 未完整安装，请先执行安装"
+            if self._managed_process and self._managed_process.poll() is None:
+                return True, f"gcli2api 已由本软件启动（PID {self._managed_process.pid}）"
+            parsed = urlparse(self.base_url)
+            child_env = os.environ.copy()
+            child_env["HOST"] = "127.0.0.1"
+            child_env["PORT"] = str(parsed.port or 7861)
+            if api_password:
+                child_env["API_PASSWORD"] = api_password
+            if panel_password:
+                child_env["PANEL_PASSWORD"] = panel_password
+            try:
+                process = subprocess.Popen(
+                    [str(python_exe), str(web_file)], cwd=str(target), env=child_env,
+                    shell=False, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                    bufsize=1, creationflags=self._creation_flags(),
+                )
+            except OSError as exc:
+                return False, (
+                    "启动 gcli2api 失败："
+                    f"{self._redact(str(exc), (api_password, panel_password))}")
+            self._managed_process = process
+            self._managed_executable = str(python_exe.resolve())
+            self._process_generation += 1
+            self._recent_process_logs.clear()
+            self._process_local.started_process = process
+            self._start_output_reader(
+                process, self._process_generation, (api_password, panel_password))
+            return True, f"gcli2api 正在启动（PID {process.pid}）"
 
     def start_and_wait(self, api_password: str = "", panel_password: str = "",
                        mode: str = MODE_ANTIGRAVITY,
@@ -777,9 +995,11 @@ class Gcli2ApiManager:
                 ), status
             return False, f"gcli2api 已在运行，但尚不可调用：{status.message}", status
 
+        self._process_local.started_process = None
         ok, start_message = self.start(api_password, panel_password)
         if not ok:
             return False, start_message, status
+        owned_process = getattr(self._process_local, "started_process", None)
 
         deadline = time.monotonic() + max(0.0, timeout)
         last_status = status
@@ -797,47 +1017,40 @@ class Gcli2ApiManager:
                     ), last_status
                 return False, f"gcli2api 服务已启动，但尚不可调用：{last_status.message}", last_status
 
-            process = self._managed_process
+            with self._process_lock:
+                process = self._managed_process
             if process is not None:
                 return_code = process.poll()
                 if return_code is not None:
-                    self._managed_process = None
-                    self._managed_executable = ""
+                    self._join_output_reader(process)
+                    log_suffix = self._safe_log_suffix()
+                    self._clear_owned_process(process)
                     return False, (
                         f"gcli2api 进程启动后立即退出（退出码 {return_code}）；"
-                        "请检查端口 7861 是否被占用，或在终端运行 web.py 查看错误"
+                        "请检查端口 7861 是否被占用，或查看应用日志"
+                        f"{log_suffix}"
                     ), last_status
 
             if time.monotonic() >= deadline:
+                stop_note = ""
+                if owned_process is not None:
+                    stopped, stop_message = self._stop_owned_process(owned_process)
+                    self._join_output_reader(owned_process)
+                    stop_note = ("；已停止本次启动的进程" if stopped
+                                 else f"；{stop_message}")
+                log_suffix = self._safe_log_suffix()
                 return False, (
                     f"gcli2api 进程已创建，但 {timeout:g} 秒内服务未响应；"
-                    "请检查端口 7861、防火墙，并在终端运行 web.py 查看错误"
+                    f"请检查端口 7861、防火墙和应用日志{stop_note}{log_suffix}"
                 ), last_status
             time.sleep(max(0.0, poll_interval))
 
     def stop_managed(self) -> Tuple[bool, str]:
-        process = self._managed_process
-        if not process:
-            return False, "没有由本软件启动的 gcli2api 进程"
-        if process.poll() is not None:
-            self._managed_process = None
-            self._managed_executable = ""
-            return True, "gcli2api 进程已经结束"
-        args = process.args if isinstance(process.args, (list, tuple)) else []
-        if not args or str(Path(str(args[0])).resolve()) != self._managed_executable:
-            return False, "进程身份不匹配，已拒绝停止"
-        try:
-            process.terminate()
-            process.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            return False, "gcli2api 未在规定时间内退出；未强制结束进程"
-        except OSError as exc:
-            return False, f"停止失败：{self._redact(str(exc))}"
-        finally:
-            if process.poll() is not None:
-                self._managed_process = None
-                self._managed_executable = ""
-        return True, "已停止由本软件启动的 gcli2api"
+        with self._process_lock:
+            process = self._managed_process
+            if not process:
+                return False, "没有由本软件启动的 gcli2api 进程"
+        return self._stop_owned_process(process)
 
     def open_panel(self) -> bool:
         return bool(webbrowser.open(self.base_url))

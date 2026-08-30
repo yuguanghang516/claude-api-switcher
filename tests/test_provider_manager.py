@@ -262,3 +262,53 @@ class TestProviderManager:
         with open(export_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         assert "sk-exportsecret1234567890" not in json.dumps(data)
+        exported = next(item for item in data["providers"] if item["name"] == "ExportTest")
+        assert exported["priority"] == 99
+
+    def test_export_import_preserves_priority(self, manager, temp_dir):
+        mgr, _ = manager
+        # 默认 DeepSeek 是未配置占位项，不属于可导入的完整 Provider。
+        assert mgr.config.delete_provider("DeepSeek") is True
+        success, _ = mgr.add_or_update_provider(
+            name="PriorityTest",
+            base_url="https://priority.example.com/anthropic",
+            model="priority-model",
+            small_fast_model="",
+            api_key="sk-priority-test",
+            priority=7,
+        )
+        assert success is True
+        export_path = os.path.join(temp_dir, "priority-export.json")
+        assert mgr.export_config(export_path)[0] is True
+
+        assert mgr.import_config(export_path)[0] is True
+        assert mgr.config.get_provider("PriorityTest")["priority"] == 7
+
+    def test_import_legacy_file_without_priority_uses_default(self, manager, temp_dir):
+        mgr, _ = manager
+        import_path = os.path.join(temp_dir, "legacy-export.json")
+        with open(import_path, "w", encoding="utf-8") as file:
+            json.dump({"providers": [{
+                "name": "LegacyImport",
+                "base_url": "https://legacy-import.example.com",
+                "model": "legacy-model",
+            }]}, file)
+
+        assert mgr.import_config(import_path)[0] is True
+        assert mgr.config.get_provider("LegacyImport")["priority"] == 99
+
+    @pytest.mark.parametrize("priority", [0, 1000, "1", True, None])
+    def test_import_rejects_invalid_priority(self, manager, temp_dir, priority):
+        mgr, _ = manager
+        import_path = os.path.join(temp_dir, "invalid-priority.json")
+        with open(import_path, "w", encoding="utf-8") as file:
+            json.dump({"providers": [{
+                "name": "InvalidPriority",
+                "base_url": "https://invalid-priority.example.com",
+                "model": "model",
+                "priority": priority,
+            }]}, file)
+
+        success, message = mgr.import_config(import_path)
+        assert success is False
+        assert "优先级" in message

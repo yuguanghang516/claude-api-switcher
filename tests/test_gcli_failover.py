@@ -129,6 +129,48 @@ def test_failover_switches_after_timeout_while_budget_remains(monkeypatch):
     assert calls == ["gemini-a", "claude-b"]
 
 
+def test_forward_uses_one_immutable_configuration_generation(monkeypatch):
+    router = GcliModelFailover()
+    router.configure(
+        "http://127.0.0.1:7861/old", "old-secret",
+        ["gemini-old-a", "gemini-old-b"], preferred_model="gemini-old-a")
+    original = router._candidates_from_snapshot
+    reconfigured = False
+
+    def reconfigure_after_snapshot(snapshot, requested_model, now):
+        nonlocal reconfigured
+        if not reconfigured:
+            reconfigured = True
+            router.configure(
+                "http://127.0.0.1:7861/new", "new-secret",
+                ["gemini-new-a", "gemini-new-b"], preferred_model="gemini-new-a")
+        return original(snapshot, requested_model, now)
+
+    calls = []
+    responses = iter((FakeResponse(429), FakeResponse(200)))
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs["headers"]["x-api-key"], kwargs["json"]["model"]))
+        return next(responses)
+
+    monkeypatch.setattr(router, "_candidates_from_snapshot", reconfigure_after_snapshot)
+    monkeypatch.setattr("app.gcli_failover.requests.post", fake_post)
+
+    response, used_model = router.forward({
+        "model": "gemini-old-a", "messages": [{"role": "user"}],
+    })
+
+    assert response.status_code == 200
+    assert used_model == "gemini-old-b"
+    assert calls == [
+        ("http://127.0.0.1:7861/old/v1/messages", "old-secret", "gemini-old-a"),
+        ("http://127.0.0.1:7861/old/v1/messages", "old-secret", "gemini-old-b"),
+    ]
+    assert [item["model"] for item in router.status()["models"]] == [
+        "gemini-new-a", "gemini-new-b"]
+    assert all(item["cooldown_seconds"] == 0 for item in router.status()["models"])
+
+
 def test_gateway_anthropic_route_requires_key_and_passes_upstream_body(monkeypatch):
     gateway = GatewayServer(host="127.0.0.1", port=18788)
     gateway.configure_gcli_failover(
