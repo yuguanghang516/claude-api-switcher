@@ -48,7 +48,7 @@
 
 ### 使用已打包的 EXE
 
-1. V4.4.0 当前为本地候选版，确认后再上传 GitHub Releases。
+1. 从 GitHub Releases 下载 `Claude API Switcher V4.4.0.exe`。
 2. 双击运行。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -162,7 +162,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-当前 V4.4.0 候选版：在 V4.3.2 基础上增加项目级 Claude 路由污染检测、Gemini 自动切换总时间预算、当前供应商优先排序、用量页信息层级与热力图可读性优化，并修复 8787 网关配置无法读取 7861 gcli2api 实时额度的问题。当前版本暂未上传 GitHub。
+V4.4.0 在 V4.3.2 基础上增加项目级 Claude 路由污染检测、Gemini 自动切换总时间预算、当前供应商优先排序、用量页信息层级与热力图可读性优化，并修复 8787 网关配置无法读取 7861 gcli2api 实时额度的问题。
 
 ## 仓库边界
 
