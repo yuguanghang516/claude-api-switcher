@@ -111,6 +111,30 @@ def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh"
     return f"Action needed | {status.message or 'Service error'}. Fix it, then click Check again."
 
 
+def provider_display_sort_key(provider, current_name: str):
+    """Keep the active and usable providers above incomplete placeholders."""
+    name = str(provider.get("name") or "")
+    configured = bool(
+        str(provider.get("base_url") or "").strip()
+        and str(provider.get("model") or "").strip()
+        and provider.get("has_api_key")
+    )
+    enabled = bool(provider.get("enabled", True))
+    if name == current_name:
+        group = 0
+    elif configured and enabled:
+        group = 1
+    elif configured:
+        group = 2
+    else:
+        group = 3
+    try:
+        priority = int(provider.get("priority", 999))
+    except (TypeError, ValueError):
+        priority = 999
+    return group, priority, name.casefold()
+
+
 class MainWindow:
     def __init__(self, data_dir: str, logs_dir: str):
         self.logger = AppLogger(logs_dir)
@@ -356,7 +380,8 @@ class MainWindow:
             text_color=TEXT_PRIMARY), "app_title")
         self.title_label.pack(anchor="w")
         self.subtitle_label = self._bind_text(ctk.CTkLabel(
-            left, text="", font=ctk.CTkFont(size=11), text_color=TEXT_MUTED), "app_subtitle_safe")
+            left, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            text_color=TEXT_SECONDARY), "app_subtitle_safe")
         self.subtitle_label.pack(anchor="w")
 
         right = ctk.CTkFrame(header, fg_color="transparent")
@@ -389,19 +414,22 @@ class MainWindow:
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=PAD_LG, pady=(PAD_MD, PAD_SM))
         self.status_title = self._bind_text(ctk.CTkLabel(
-            head, text="", font=ctk.CTkFont(size=14, weight="bold"),
+            head, text="", font=ctk.CTkFont(
+                family=FONT_FAMILY, size=15, weight="bold"),
             text_color=TEXT_PRIMARY), "current_status")
         self.status_title.pack(side="left")
+        self._help(head, "tooltip_current_status", side="left", padx=(PAD_SM, 0))
         self.status_indicator = ctk.CTkLabel(head, text="○", text_color=TEXT_MUTED,
-                                             font=ctk.CTkFont(size=15))
+                                             font=ctk.CTkFont(
+                                                 family=FONT_FAMILY, size=15))
         self.status_indicator.pack(side="right")
 
         grid = ctk.CTkFrame(card, fg_color="transparent")
         grid.pack(fill="x", padx=PAD_LG, pady=(0, PAD_SM))
         grid.grid_columnconfigure(1, weight=1)
-        self.status_provider = self._status_row(grid, 0, "status_provider_label", "tooltip_status_provider")
-        self.status_model = self._status_row(grid, 1, "status_model_label", "tooltip_status_model")
-        self.status_state = self._status_row(grid, 2, "status_state_label", "tooltip_status_state")
+        self.status_provider = self._status_row(grid, 0, "status_provider_label")
+        self.status_model = self._status_row(grid, 1, "status_model_label")
+        self.status_state = self._status_row(grid, 2, "status_state_label")
 
         project_row = ctk.CTkFrame(card, fg_color="transparent")
         project_row.pack(fill="x", padx=PAD_LG, pady=PAD_SM)
@@ -421,28 +449,33 @@ class MainWindow:
             command=self._browse_project_dir), "browse")
         self.browse_btn.pack(side="right")
         self.project_source_label = ctk.CTkLabel(
-            project_row, text="", width=82, font=ctk.CTkFont(size=10),
+            project_row, text="", width=82,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
             text_color=INFO)
         self.project_source_label.pack(side="right", padx=(0, PAD_SM))
         self.project_entry.pack(side="left", fill="x", expand=True, padx=(0, PAD_SM))
 
         self.quick_launch_btn = self._bind_text(ctk.CTkButton(
-            card, text="", height=48, font=ctk.CTkFont(size=15, weight="bold"),
+            card, text="", height=48, font=ctk.CTkFont(
+                family=FONT_FAMILY, size=15, weight="bold"),
             fg_color=SUCCESS, hover_color=SUCCESS_DARK, corner_radius=10,
             command=self._quick_launch), "quick_launch")
         self.quick_launch_btn.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_SM))
         self.session_note = self._bind_text(ctk.CTkLabel(
-            card, text="", font=ctk.CTkFont(size=10), text_color=TEXT_MUTED), "session_only_note")
+            card, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            text_color=TEXT_SECONDARY), "session_only_note")
         self.session_note.pack(pady=(0, PAD_MD))
 
-    def _status_row(self, parent, row: int, key: str, tooltip_key: str):
+    def _status_row(self, parent, row: int, key: str):
         label_box = ctk.CTkFrame(parent, fg_color="transparent")
         label_box.grid(row=row, column=0, sticky="w", pady=PAD_XS)
         label = self._bind_text(ctk.CTkLabel(
-            label_box, text="", width=82, anchor="w", text_color=TEXT_SECONDARY), key)
+            label_box, text="", width=112, anchor="w", text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), key)
         label.pack(side="left")
-        self._help(label_box, tooltip_key, side="left", padx=(PAD_XS, PAD_SM))
-        value = ctk.CTkLabel(parent, text="—", anchor="w", text_color=TEXT_PRIMARY)
+        value = ctk.CTkLabel(
+            parent, text="—", anchor="w", text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
         value.grid(row=row, column=1, sticky="ew", pady=PAD_XS)
         return value
 
@@ -1319,45 +1352,56 @@ class MainWindow:
                          text_color=TEXT_MUTED).pack(pady=PAD_XL)
             return
         current = self.config.get_current_provider_name()
-        for provider in providers:
+        for provider in sorted(
+                providers, key=lambda item: provider_display_sort_key(item, current)):
             self._add_provider_card(provider, current)
 
     def _add_provider_card(self, provider, current):
         name = provider.get("name", "")
         enabled = provider.get("enabled", True)
+        configured = bool(
+            provider.get("base_url") and provider.get("model")
+            and provider.get("has_api_key"))
         card = ctk.CTkFrame(self.provider_list_frame, fg_color=BG_SURFACE,
                             corner_radius=10, border_width=1,
                             border_color=ACCENT if name == current else BORDER)
         card.pack(fill="x", pady=PAD_XS)
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.pack(fill="x", padx=PAD_LG, pady=(PAD_MD, PAD_XS))
-        ctk.CTkLabel(top, text=name, font=ctk.CTkFont(size=14, weight="bold"),
+        ctk.CTkLabel(top, text=name, font=ctk.CTkFont(
+                         family=FONT_FAMILY, size=14, weight="bold"),
                      text_color=TEXT_PRIMARY if enabled else TEXT_MUTED).pack(side="left")
         if name == current:
             ctk.CTkLabel(top, text=t("selected_badge", self.lang), text_color=ACCENT,
                          font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=PAD_SM)
         if not enabled:
             ctk.CTkLabel(top, text=t("status_disabled", self.lang), text_color=TEXT_MUTED).pack(side="right")
+        elif not configured:
+            ctk.CTkLabel(
+                top, text=self._ui("未配置", "Not configured"),
+                text_color=TEXT_MUTED,
+                font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(side="right")
 
         meta = ctk.CTkFrame(card, fg_color="transparent")
         meta.pack(fill="x", padx=PAD_LG)
         ctk.CTkLabel(meta, text=provider.get("base_url") or "—", anchor="w",
                      text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=10)).pack(fill="x")
         ctk.CTkLabel(meta, text=f"{provider.get('model') or '—'}   ·   {provider.get('masked_key')}",
-                     anchor="w", text_color=TEXT_MUTED, font=ctk.CTkFont(size=10)).pack(fill="x")
+                     anchor="w", text_color=TEXT_MUTED,
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(fill="x")
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_MD))
         use_btn = ctk.CTkButton(
             actions, text=t("test_and_use", self.lang), width=105, height=30,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
-            state="normal" if enabled else "disabled",
+            state="normal" if enabled and configured else "disabled",
             command=lambda n=name: self._use_provider(n))
         use_btn.pack(side="left", padx=(0, PAD_XS))
         test_btn = ctk.CTkButton(
             actions, text=t("test", self.lang), width=60, height=30,
             fg_color=INFO, hover_color=INFO_DARK,
-            state="normal" if enabled else "disabled",
+            state="normal" if enabled and configured else "disabled",
             command=lambda n=name: self._begin_test(n, "test"))
         test_btn.pack(side="left", padx=PAD_XS)
         status_text, status_color = self._provider_status(name, provider)
@@ -1389,6 +1433,10 @@ class MainWindow:
         result = self._test_results.get(name)
         if result and not result[0]:
             return result[1], DANGER
+        if name == self.config.get_current_provider_name():
+            return self._ui(
+                "当前使用 · 启动前自动检测",
+                "In use · checked before launch"), INFO
         return t("status_not_tested", self.lang), TEXT_MUTED
 
     def _build_log_section(self):

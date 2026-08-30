@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from app.gcli_failover import GcliModelFailover
 from app.gateway_server import GatewayServer
@@ -82,6 +83,50 @@ def test_streaming_429_switches_before_any_bytes_are_exposed(monkeypatch):
     response, model = router.forward({"model": "gemini-a", "messages": [{}], "stream": True}, stream=True)
     assert first.closed
     assert response is second and model == "gemini-b"
+
+
+def test_failover_enforces_total_time_budget(monkeypatch):
+    now = [100.0]
+    router = GcliModelFailover(timeout=45, total_timeout=70, clock=lambda: now[0])
+    router.configure(
+        "http://127.0.0.1:7861/antigravity", "secret",
+        ["gemini-a", "gemini-b", "gemini-c"])
+    timeouts = []
+
+    def fake_post(*_args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        now[0] += 40
+        return FakeResponse(429)
+
+    monkeypatch.setattr("app.gcli_failover.requests.post", fake_post)
+    response, used_model = router.forward({"model": "gemini-a", "messages": [{}]})
+
+    assert response.status_code == 429
+    assert used_model == "gemini-b"
+    assert timeouts == [45, 30]
+
+
+def test_failover_switches_after_timeout_while_budget_remains(monkeypatch):
+    now = [10.0]
+    router = GcliModelFailover(timeout=30, total_timeout=60, clock=lambda: now[0])
+    router.configure(
+        "http://127.0.0.1:7861/antigravity", "secret",
+        ["gemini-a", "claude-b"])
+    calls = []
+
+    def fake_post(*_args, **kwargs):
+        calls.append(kwargs["json"]["model"])
+        if len(calls) == 1:
+            now[0] += 20
+            raise requests.exceptions.Timeout()
+        return FakeResponse(200)
+
+    monkeypatch.setattr("app.gcli_failover.requests.post", fake_post)
+    response, used_model = router.forward({"model": "gemini-a", "messages": [{}]})
+
+    assert response.status_code == 200
+    assert used_model == "claude-b"
+    assert calls == ["gemini-a", "claude-b"]
 
 
 def test_gateway_anthropic_route_requires_key_and_passes_upstream_body(monkeypatch):

@@ -1,8 +1,8 @@
-# Claude API Switcher V4.3.2
+# Claude API Switcher V4.4.0
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.3.2.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.4.0.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -48,7 +48,7 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.3.2.exe`。
+1. V4.4.0 当前为本地候选版，确认后再上传 GitHub Releases。
 2. 双击运行。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -162,7 +162,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-当前 V4.3.2 基线：382 项自动化测试全部通过；实机从已保存配置自动启动 gcli2api 与 8787 本地切换网关，Gemini 请求返回 HTTP 200。Claude 启动时会清除旧供应商环境、只注入一种认证变量，并用全新 Windows Terminal 窗口隔离 LongCat 等旧会话配置。额度列表字体已统一，HTTP 400 会显示经过脱敏的上游原因。
+当前 V4.4.0 候选版：在 V4.3.2 基础上增加项目级 Claude 路由污染检测、Gemini 自动切换总时间预算、当前供应商优先排序、用量页信息层级与热力图可读性优化，并修复 8787 网关配置无法读取 7861 gcli2api 实时额度的问题。当前版本暂未上传 GitHub。
 
 ## 仓库边界
 

@@ -10,6 +10,7 @@ import app.path_resolver as resolver_module
 from app.claude_launcher import ClaudeLauncher
 from app.config_manager import ConfigManager
 from app.i18n import TEXTS
+from app.gui import provider_display_sort_key
 from app.provider_manager import ProviderManager
 from app.path_resolver import ClaudeCommandResolver, ProjectDirectoryResolver
 from main import get_state_dir, migrate_legacy_config
@@ -131,6 +132,62 @@ def test_launcher_overrides_inherited_longcat_routing(tmp_path, monkeypatch):
     assert captured["env"]["ANTHROPIC_AUTH_TOKEN"] == "gcli-password"
     assert "ANTHROPIC_API_KEY" not in captured["env"]
     assert captured["command"][-2:] == ["--setting-sources", "local"]
+
+
+def test_launcher_chooses_clean_project_settings_when_local_has_old_route(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(json.dumps({
+        "env": {"ANTHROPIC_BASE_URL": "https://old.invalid"}
+    }), encoding="utf-8")
+    (settings_dir / "settings.json").write_text(json.dumps({
+        "permissions": {"allow": ["Read"]}
+    }), encoding="utf-8")
+
+    source, error = ClaudeLauncher.select_setting_source(str(tmp_path))
+
+    assert source == "project"
+    assert error == ""
+
+
+def test_launcher_rejects_project_when_both_settings_sources_route_an_api(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text(
+        json.dumps({"model": "LongCat-2.0"}), encoding="utf-8")
+    (settings_dir / "settings.json").write_text(
+        json.dumps({"apiKeyHelper": "old-provider-helper"}), encoding="utf-8")
+
+    source, error = ClaudeLauncher.select_setting_source(str(tmp_path))
+
+    assert source == ""
+    assert "settings.local.json" in error
+    assert "settings.json" in error
+    assert "API 路由" in error
+
+
+def test_launcher_treats_malformed_source_as_unsafe_but_uses_clean_alternative(tmp_path):
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    (settings_dir / "settings.local.json").write_text("not-json", encoding="utf-8")
+
+    source, error = ClaudeLauncher.select_setting_source(str(tmp_path))
+
+    assert source == "project"
+    assert error == ""
+
+
+def test_provider_display_sort_prioritizes_current_then_configured():
+    providers = [
+        {"name": "Empty", "enabled": False, "base_url": "", "model": "", "has_api_key": False},
+        {"name": "Ready", "enabled": True, "base_url": "https://ready.invalid", "model": "m", "has_api_key": True, "priority": 20},
+        {"name": "Current", "enabled": True, "base_url": "https://current.invalid", "model": "m", "has_api_key": True, "priority": 99},
+        {"name": "Disabled", "enabled": False, "base_url": "https://disabled.invalid", "model": "m", "has_api_key": True, "priority": 1},
+    ]
+
+    ordered = sorted(providers, key=lambda item: provider_display_sort_key(item, "Current"))
+
+    assert [item["name"] for item in ordered] == ["Current", "Ready", "Disabled", "Empty"]
 
 
 def test_project_resolver_prefers_manual_directory(tmp_path):

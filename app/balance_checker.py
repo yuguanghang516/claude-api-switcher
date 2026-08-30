@@ -114,6 +114,21 @@ class BalanceChecker:
             source="供应商控制台", portal_url=portal, supports_balance=False,
             last_updated=int(time.time()))
 
+    @staticmethod
+    def _gcli_panel_root(base_url: str) -> str:
+        """Resolve the real gcli2api panel behind the app's local 8787 gateway."""
+        parsed = urlparse(str(base_url or "").strip())
+        host = (parsed.hostname or "").lower()
+        try:
+            port = parsed.port
+        except ValueError:
+            return ""
+        if (parsed.scheme == "http" and host in {"127.0.0.1", "localhost", "::1"}
+                and port == 8787):
+            display_host = "[::1]" if host == "::1" else host
+            return f"http://{display_host}:7861"
+        return f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+
     def check_balance(self, provider_type: str, api_key: str,
                       base_url: str = "", provider_name: str = "") -> BalanceInfo:
         normalized = (provider_type or "custom").strip().lower()
@@ -174,7 +189,7 @@ class BalanceChecker:
                               provider_name: str = "Gemini Antigravity") -> BalanceInfo:
         parsed = urlparse(base_url)
         host = (parsed.hostname or "").lower()
-        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else ""
+        root = self._gcli_panel_root(base_url)
         common = {
             "provider": provider_name,
             "source": "gcli2api 配额接口（Google 返回）",

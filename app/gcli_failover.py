@@ -22,9 +22,11 @@ class GcliFailoverEvent:
 class GcliModelFailover:
     """Select gcli2api models using quota hints and authoritative 429 results."""
 
-    def __init__(self, timeout: int = 120, max_models: int = 3,
+    def __init__(self, timeout: float = 45, max_models: int = 3,
+                 total_timeout: float = 90,
                  clock=time.monotonic) -> None:
-        self.timeout = timeout
+        self.timeout = max(1.0, float(timeout))
+        self.total_timeout = max(self.timeout, float(total_timeout))
         self.max_models = max(1, max_models)
         self._clock = clock
         self._lock = threading.RLock()
@@ -166,14 +168,20 @@ class GcliModelFailover:
         }
         last_response = None
         last_exception = None
+        last_model = ""
         first_model = candidates[0]
+        started = self._clock()
         for model in candidates:
+            remaining = self.total_timeout - (self._clock() - started)
+            if remaining <= 0:
+                break
             request_payload = dict(payload)
             request_payload["model"] = model
             try:
                 response = requests.post(
                     url, headers=headers, json=request_payload,
-                    timeout=self.timeout, stream=stream, allow_redirects=False,
+                    timeout=min(self.timeout, remaining), stream=stream,
+                    allow_redirects=False,
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 last_exception = exc
@@ -181,6 +189,7 @@ class GcliModelFailover:
             if last_response is not None:
                 last_response.close()
             last_response = response
+            last_model = model
             if response.status_code == 200:
                 self.report_success(model)
                 if model != first_model:
@@ -197,7 +206,7 @@ class GcliModelFailover:
             # Authentication and request-shape failures must not be hidden by another model.
             return response, model
         if last_response is not None:
-            return last_response, candidates[-1]
+            return last_response, last_model
         if last_exception is not None:
             raise last_exception
         raise RuntimeError("没有可用的 Gemini 候选模型")

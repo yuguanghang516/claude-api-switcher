@@ -552,7 +552,11 @@ TEXTS = {
         "zh": "仅对新打开的 Claude 窗口生效，不会覆盖 ~/.claude/settings.json",
         "en": "Only affects the new Claude window; global settings stay unchanged",
     },
-    "selected_badge": {"zh": "当前选择", "en": "Selected"},
+    "selected_badge": {"zh": "当前使用", "en": "In Use"},
+    "tooltip_current_status": {
+        "zh": "这里显示快速启动 Claude 将使用的供应商、模型和最近检测状态；启动前会自动再次检测。",
+        "en": "Shows the provider, model, and latest check used by Quick Launch. The API is checked again before launch.",
+    },
     "test_and_use": {"zh": "测试并使用", "en": "Test & Use"},
     "status_not_tested": {"zh": "未测试", "en": "Not tested"},
     "status_testing": {"zh": "检测中…", "en": "Testing…"},

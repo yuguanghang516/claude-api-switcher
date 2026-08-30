@@ -5,6 +5,7 @@ import requests
 
 from app.balance_checker import BalanceChecker
 from app.db_manager import DatabaseManager
+from app.v2_dashboard import is_gcli_balance
 
 
 @pytest.mark.parametrize(
@@ -89,3 +90,43 @@ def test_gateway_usage_is_grouped_by_real_provider_without_guessing_history(tmp_
     assert rows["LongCat"]["total_requests"] == 1
     assert rows["LongCat"]["total_tokens"] == 120
     assert rows["历史记录未标注"]["failed_requests"] == 1
+
+
+def test_gcli_balance_row_is_identified_from_source_without_guessing_other_providers():
+    gcli = SimpleNamespace(provider="Gemini Antigravity", source="gcli2api 配额接口（Google 返回）")
+    longcat = SimpleNamespace(provider="LongCat", source="供应商控制台")
+
+    assert is_gcli_balance("Gemini Antigravity (gcli2api)", gcli) is True
+    assert is_gcli_balance("LongCat", longcat) is False
+
+
+def test_gcli_quota_maps_local_failover_gateway_to_real_panel(monkeypatch):
+    seen = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"items": []}
+
+    def fake_get(url, **kwargs):
+        seen.append(url)
+        return Response()
+
+    monkeypatch.setattr("app.balance_checker.requests.get", fake_get)
+    result = BalanceChecker().check_balance(
+        "gcli2api", "local-password", "http://127.0.0.1:8787",
+        "Gemini Antigravity (gcli2api)")
+
+    assert seen == ["http://127.0.0.1:7861/creds/status"]
+    assert result.portal_url == "http://127.0.0.1:7861"
+
+
+def test_gcli_quota_rejects_invalid_port_without_raising():
+    result = BalanceChecker().check_balance(
+        "gcli2api", "local-password", "http://127.0.0.1:not-a-port",
+        "Gemini Antigravity (gcli2api)")
+
+    assert result.status == "error"
+    assert "地址不安全或无效" in result.error

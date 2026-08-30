@@ -1,7 +1,9 @@
 """以会话级环境变量安全启动 Claude Code。"""
+import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Tuple
 
 from .path_resolver import ClaudeCommandResolver
@@ -9,6 +11,55 @@ from .path_resolver import ClaudeCommandResolver
 
 class ClaudeLauncher:
     """不写临时脚本、不修改全局 Claude 配置的启动器。"""
+
+    _ROUTING_ENV_KEYS = {
+        "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_FOUNDRY",
+        "CLAUDE_CODE_USE_VERTEX",
+    }
+    _MAX_SETTINGS_BYTES = 1024 * 1024
+
+    @classmethod
+    def _settings_source_is_clean(cls, path: Path) -> bool:
+        """Inspect only routing keys; never return or log setting values."""
+        if not path.exists():
+            return True
+        try:
+            if not path.is_file() or path.stat().st_size > cls._MAX_SETTINGS_BYTES:
+                return False
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError, TypeError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("model") or "").strip() or payload.get("apiKeyHelper"):
+            return False
+        env = payload.get("env") or {}
+        if not isinstance(env, dict):
+            return False
+        for key in env:
+            normalized = str(key or "").strip().upper()
+            if normalized.startswith("ANTHROPIC_") or normalized in cls._ROUTING_ENV_KEYS:
+                return False
+        return True
+
+    @classmethod
+    def select_setting_source(cls, project_dir: str) -> Tuple[str, str]:
+        """Choose one Claude settings source that cannot override API routing."""
+        settings_dir = Path(project_dir) / ".claude"
+        candidates = (
+            ("local", settings_dir / "settings.local.json"),
+            ("project", settings_dir / "settings.json"),
+        )
+        unsafe = []
+        for source, path in candidates:
+            if cls._settings_source_is_clean(path):
+                return source, ""
+            unsafe.append(path.name)
+        return "", (
+            "项目中的 Claude 设置同时包含旧 API 路由或文件格式异常："
+            f"{', '.join(unsafe)}。请移除其中的 ANTHROPIC_*、model 或 apiKeyHelper，"
+            "再由本软件启动；全局设置不会被修改。"
+        )
 
     @staticmethod
     def launch(
@@ -31,6 +82,9 @@ class ClaudeLauncher:
             return False, "未选择项目目录"
         if not os.path.isdir(project_dir):
             return False, f"项目目录不存在：{project_dir}"
+        setting_source, setting_error = ClaudeLauncher.select_setting_source(project_dir)
+        if not setting_source:
+            return False, setting_error
         claude_path = claude_path or ClaudeCommandResolver.resolve()
         if not claude_path or not os.path.isfile(claude_path):
             return False, "找不到 Claude Code；已检查 PATH、npm 和 ~/.local/bin"
@@ -89,13 +143,13 @@ class ClaudeLauncher:
                 "new-tab",
                 "--title", f"Claude Code · {provider_name}",
                 cmd_path or "cmd.exe", "/K", claude_path,
-                "--setting-sources", "local",
+                "--setting-sources", setting_source,
             ]
         else:
             command = [
                 cmd_path,
                 "/K",
-                f'title Claude Code && call "{claude_path}" --setting-sources local',
+                f'title Claude Code && call "{claude_path}" --setting-sources {setting_source}',
             ]
         creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
         try:

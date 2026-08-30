@@ -39,9 +39,18 @@ WARNING = (LIGHT.warning, DARK.warning)
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_MONO = "Consolas"
 PAD_XS, PAD_SM, PAD_MD, PAD_LG, PAD_XL = 4, 8, 12, 16, 24
-FONT_PAGE_TITLE = 16
-FONT_SECTION_TITLE = 13
-FONT_BODY = 11
+FONT_PAGE_TITLE = 20
+FONT_SECTION_TITLE = 14
+FONT_BODY = 12
+
+
+def is_gcli_balance(name: str, info) -> bool:
+    """Identify gcli quota rows without relying on translated display text alone."""
+    combined = " ".join((
+        str(name or ""), str(getattr(info, "provider", "") or ""),
+        str(getattr(info, "source", "") or ""),
+    )).lower()
+    return "gcli2api" in combined or "gemini antigravity" in combined
 
 
 class TokenHeatmap:
@@ -55,7 +64,7 @@ class TokenHeatmap:
         self.data = []
         self._cells = []
         self._hovered = None
-        self.canvas = tk.Canvas(parent, height=230, bd=0, highlightthickness=0,
+        self.canvas = tk.Canvas(parent, height=250, bd=0, highlightthickness=0,
                                 cursor="arrow")
         self.canvas.pack(fill="x", expand=True)
         self.canvas.bind("<Configure>", lambda _event: self.redraw())
@@ -110,13 +119,14 @@ class TokenHeatmap:
         bg = self._color(BG_SURFACE)
         self.canvas.configure(bg=bg)
 
-        left, right, top, bottom = 74, 12, 30, 10
+        left, right, top, bottom = 86, 12, 32, 34
         gap_x, gap_y = 4, 5
         grid_width = width - left - right
         cell_width = max(12, (grid_width - gap_x * 23) / 24)
         cell_height = max(16, (height - top - bottom - gap_y * 6) / 7)
-        text_color = self._color(TEXT_MUTED)
-        font = (FONT_FAMILY, 9)
+        text_color = self._color(TEXT_SECONDARY)
+        font = (FONT_FAMILY, 10)
+        border_color = self._color(BORDER)
         rows = self.data or []
         max_value = max((max(row.get("hours", [0]) or [0]) for row in rows), default=0)
         levels = self.DARK_LEVELS if ctk.get_appearance_mode().lower() == "dark" else self.LIGHT_LEVELS
@@ -124,7 +134,7 @@ class TokenHeatmap:
         for hour in (0, 6, 12, 18):
             x = left + hour * (cell_width + gap_x)
             self.canvas.create_text(x, 14, text=f"{hour}:00", anchor="w",
-                                    fill=text_color, font=(FONT_FAMILY, 9, "bold"))
+                                    fill=text_color, font=(FONT_FAMILY, 10, "bold"))
 
         for row_index in range(7):
             row = rows[row_index] if row_index < len(rows) else {"date": "", "hours": [0] * 24}
@@ -143,8 +153,26 @@ class TokenHeatmap:
                     ratio = math.log1p(value) / math.log1p(max_value)
                     level = min(4, max(1, math.ceil(ratio * 4)))
                 self.canvas.create_rectangle(
-                    x1, y1, x2, y2, fill=levels[level], outline="", tags=("cell",))
+                    x1, y1, x2, y2, fill=levels[level], outline=border_color,
+                    width=1, tags=("cell",))
                 self._cells.append((x1, y1, x2, y2, row, hour, int(value)))
+
+        legend_y = height - 14
+        legend_x = max(left, width - 188)
+        low_text = "低" if self.lang == "zh" else "Low"
+        high_text = "高" if self.lang == "zh" else "High"
+        self.canvas.create_text(
+            legend_x, legend_y, text=low_text, anchor="e",
+            fill=text_color, font=(FONT_FAMILY, 10))
+        start_x = legend_x + 8
+        for index, color in enumerate(levels):
+            x1 = start_x + index * 22
+            self.canvas.create_rectangle(
+                x1, legend_y - 6, x1 + 16, legend_y + 6,
+                fill=color, outline=border_color, width=1)
+        self.canvas.create_text(
+            start_x + len(levels) * 22, legend_y, text=high_text, anchor="w",
+            fill=text_color, font=(FONT_FAMILY, 10))
 
     def _on_motion(self, event):
         cell = next((item for item in self._cells
@@ -227,17 +255,22 @@ class V2DashboardPanel:
                 "数据口径：Claude 本机统计和网关日志不等于供应商账单；只有标注“官方余额”的数值才是账户余额。不会读取聊天内容。",
                 "Scope: local Claude usage and gateway logs are not provider bills. Only values marked Official Balance are account balances. Chat content is never read."))
             self.claude_usage_title.configure(
-                text=self._ui("Claude Code 本机用量（不含 Codex）", "Local Claude Code Usage (Codex excluded)"))
+                text=self._ui("Claude Code 本机统计（不含 Codex）", "Local Claude Code Metrics (Codex excluded)"))
             self.heatmap_title.configure(
                 text=self._ui("近 7 天 Token 热力图", "7-Day Token Heatmap"))
             self.heatmap_note.configure(text=self._ui(
                 "仅统计 Claude Code 输入 + 输出 Token；缓存单独展示，不计入热力图。",
                 "Claude Code input + output tokens only; cache is shown separately and excluded from the heatmap."))
+            self.claude_models_title.configure(
+                text=self._ui("历史 Claude 模型用量", "Historical Claude Model Usage"))
+            self.claude_models_note.configure(text=self._ui(
+                "模型名来自本机 Claude 会话历史，只说明过去用过什么，不代表当前正在连接的供应商。",
+                "Model names come from local Claude session history and do not indicate the currently connected provider."))
             self.token_heatmap.set_language(self.lang)
             self.gateway_usage_title.configure(
-                text=self._ui("各 API 本地网关用量", "Per-API Local Gateway Usage"))
+                text=self._ui("本地网关 API 调用", "Local Gateway API Calls"))
             self.official_balance_title.configure(
-                text=self._ui("供应商账户余额", "Provider Account Balance"))
+                text=self._ui("供应商余额与模型额度", "Provider Balance & Model Quota"))
             self.routing_title.configure(
                 text=self._ui("路由策略", "Routing"))
             self.routing_switch.configure(
@@ -314,7 +347,7 @@ class V2DashboardPanel:
         self.balance_scope_note.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
         self.claude_usage_title = ctk.CTkLabel(
-            card, text=self._ui("Claude Code 本机用量（不含 Codex）", "Local Claude Code Usage (Codex excluded)"),
+            card, text=self._ui("Claude Code 本机统计（不含 Codex）", "Local Claude Code Metrics (Codex excluded)"),
             anchor="w",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
             text_color=TEXT_PRIMARY)
@@ -337,18 +370,35 @@ class V2DashboardPanel:
             text=self._ui(
                 "仅统计 Claude Code 输入 + 输出 Token；缓存单独展示，不计入热力图。",
                 "Claude Code input + output tokens only; cache is shown separately and excluded from the heatmap."),
-            anchor="w", text_color=TEXT_MUTED,
+            anchor="w", text_color=TEXT_SECONDARY,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
         self.heatmap_note.pack(fill="x", padx=PAD_LG, pady=(PAD_XS, PAD_SM))
         heatmap_frame = ctk.CTkFrame(card, fg_color=BG_SURFACE)
         heatmap_frame.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
         self.token_heatmap = TokenHeatmap(heatmap_frame, self.lang)
 
+        self.claude_models_title = ctk.CTkLabel(
+            card, text=self._ui("历史 Claude 模型用量", "Historical Claude Model Usage"),
+            anchor="w",
+            font=ctk.CTkFont(
+                family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
+            text_color=TEXT_PRIMARY)
+        self.claude_models_title.pack(fill="x", padx=PAD_LG, pady=(0, PAD_XS))
+        self.claude_models_note = ctk.CTkLabel(
+            card,
+            text=self._ui(
+                "模型名来自本机 Claude 会话历史，只说明过去用过什么，不代表当前正在连接的供应商。",
+                "Model names come from local Claude session history and do not indicate the currently connected provider."),
+            anchor="w", justify="left", wraplength=860,
+            text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
+        self.claude_models_note.pack(fill="x", padx=PAD_LG, pady=(0, PAD_XS))
+
         self.claude_usage_models_frame = ctk.CTkFrame(card, fg_color="transparent")
         self.claude_usage_models_frame.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
         self.gateway_usage_title = ctk.CTkLabel(
-            card, text=self._ui("各 API 本地网关用量", "Per-API Local Gateway Usage"),
+            card, text=self._ui("本地网关 API 调用", "Local Gateway API Calls"),
             anchor="w",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
             text_color=TEXT_PRIMARY)
@@ -357,7 +407,7 @@ class V2DashboardPanel:
         self.gateway_usage_frame.pack(fill="x", padx=PAD_LG, pady=(PAD_XS, PAD_MD))
 
         self.official_balance_title = ctk.CTkLabel(
-            card, text=self._ui("供应商账户余额", "Provider Account Balance"),
+            card, text=self._ui("供应商余额与模型额度", "Provider Balance & Model Quota"),
             anchor="w",
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_SECTION_TITLE, weight="bold"),
             text_color=TEXT_PRIMARY)
@@ -606,6 +656,7 @@ class V2DashboardPanel:
         ctk.CTkLabel(row, text=name, text_color=TEXT_PRIMARY,
                      font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY, weight="bold")).grid(
                          row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
+        gcli_row = is_gcli_balance(name, info)
         if info.status == "quota":
             detail = self._ui(
                 f"模型配额 · {info.error} · {info.source}",
@@ -618,6 +669,12 @@ class V2DashboardPanel:
             detail = self._ui(f"官方余额 · {info.source}", f"Official balance · {info.source}")
             value = f"{info.currency} {info.balance:,.2f}"
             value_color = SUCCESS
+        elif info.status == "error" and gcli_row:
+            detail = self._ui(
+                f"实时模型额度请到“Gemini 反代”页刷新 · 当前原因：{info.error}",
+                f"Refresh live model quota on the Gemini Proxy page · Current issue: {info.error}")
+            value = self._ui("到反代页查看", "Open Gemini Proxy")
+            value_color = INFO
         elif info.status == "error":
             detail = self._ui(f"查询失败 · {info.error}", f"Check failed · {info.error}")
             value = self._ui("不可用", "Unavailable")
@@ -633,7 +690,7 @@ class V2DashboardPanel:
         ctk.CTkLabel(row, text=value, text_color=value_color,
                      font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY, weight="bold")).grid(
                          row=0, column=2, sticky="e", padx=PAD_SM, pady=PAD_SM)
-        if info.portal_url:
+        if info.portal_url and not gcli_row:
             ctk.CTkButton(
                 row, text=self._ui("打开平台", "Open Portal"), width=74, height=26,
                 fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
