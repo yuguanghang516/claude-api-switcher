@@ -70,6 +70,45 @@ def _resource_path(relative_path: str) -> Path:
     return bundle_root / relative_path
 
 
+def clamp_dialog_geometry(preferred_width: int, preferred_height: int,
+                          screen_width: int, screen_height: int,
+                          parent_x: int = 0, parent_y: int = 0,
+                          parent_width: int = 0, parent_height: int = 0):
+    """Fit and center a dialog inside the current desktop work area."""
+    available_width = max(1, int(screen_width) - 64)
+    available_height = max(1, int(screen_height) - 112)
+    width = max(1, min(int(preferred_width), available_width))
+    height = max(1, min(int(preferred_height), available_height))
+    if parent_width > 1 and parent_height > 1:
+        x = int(parent_x + (parent_width - width) / 2)
+        y = int(parent_y + (parent_height - height) / 2)
+    else:
+        x = int((screen_width - width) / 2)
+        y = int((screen_height - height) / 2)
+    x = min(max(0, x), max(0, int(screen_width) - width))
+    y = min(max(0, y), max(0, int(screen_height) - height))
+    return width, height, x, y
+
+
+def _configure_adaptive_dialog(dialog, parent, preferred_width: int,
+                               preferred_height: int) -> None:
+    """Apply a DPI/small-screen-safe geometry while keeping the form resizable."""
+    parent.update_idletasks()
+    screen_x = int(parent.winfo_vrootx())
+    screen_y = int(parent.winfo_vrooty())
+    screen_width = max(1, int(parent.winfo_vrootwidth()))
+    screen_height = max(1, int(parent.winfo_vrootheight()))
+    parent_x = int(parent.winfo_rootx()) - screen_x
+    parent_y = int(parent.winfo_rooty()) - screen_y
+    width, height, x, y = clamp_dialog_geometry(
+        preferred_width, preferred_height, screen_width, screen_height,
+        parent_x, parent_y, int(parent.winfo_width()), int(parent.winfo_height()))
+    absolute_x, absolute_y = screen_x + x, screen_y + y
+    dialog.geometry(f"{width}x{height}{absolute_x:+d}{absolute_y:+d}")
+    dialog.minsize(min(width, 420), min(height, 360))
+    dialog.resizable(True, True)
+
+
 def gcli_guide_text(status: Gcli2ApiStatus, has_password: bool, lang: str = "zh",
                     mode: str = MODE_ANTIGRAVITY) -> str:
     """Return the exact next action for the current gcli2api state."""
@@ -321,7 +360,7 @@ class MainWindow:
                 hover_color=ACCENT_HOVER if i == 0 else BG_ELEVATED,
                 text_color=ACCENT_TEXT if i == 0 else TEXT_PRIMARY,
                 corner_radius=7,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=11, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
                 command=lambda tab_name=name: self._switch_gateway_subtab(tab_name))
             button.grid(row=0, column=i, sticky="ew", padx=PAD_XS, pady=PAD_XS)
             self.gateway_sub_buttons[name] = button
@@ -450,7 +489,7 @@ class MainWindow:
         self.browse_btn.pack(side="right")
         self.project_source_label = ctk.CTkLabel(
             project_row, text="", width=82,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=INFO)
         self.project_source_label.pack(side="right", padx=(0, PAD_SM))
         self.project_entry.pack(side="left", fill="x", expand=True, padx=(0, PAD_SM))
@@ -462,7 +501,7 @@ class MainWindow:
             command=self._quick_launch), "quick_launch")
         self.quick_launch_btn.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_SM))
         self.session_note = self._bind_text(ctk.CTkLabel(
-            card, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            card, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=TEXT_SECONDARY), "session_only_note")
         self.session_note.pack(pady=(0, PAD_MD))
 
@@ -581,7 +620,7 @@ class MainWindow:
         self.gcli_detail_label = ctk.CTkLabel(
             card, text=f"{DEFAULT_BASE_URL}  ·  {self.gcli2api.install_dir}",
             anchor="w", justify="left", wraplength=900, text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_MONO, size=11))
+            font=ctk.CTkFont(family=FONT_MONO, size=12))
         self.gcli_detail_label.grid(row=3, column=0, columnspan=4, sticky="ew",
                                    padx=PAD_LG, pady=(0, PAD_SM))
 
@@ -937,7 +976,7 @@ class MainWindow:
             return
 
         def done(snapshot, error):
-            self._set_gcli_busy(False)
+            self._finish_gcli_busy_status()
             if error:
                 self.gcli_quota_summary.configure(
                     text=self._ui(f"额度刷新失败：{error}", f"Quota refresh failed: {error}"),
@@ -950,6 +989,11 @@ class MainWindow:
         self._run_gcli_worker(
             lambda: self.gcli2api.get_model_quotas(self._gcli_password(), self._gcli_mode()),
             done, self._ui("正在刷新额度…", "Refreshing quota…"))
+
+    def _finish_gcli_busy_status(self) -> None:
+        """Restore the persistent service/guide copy after a transient worker label."""
+        self._set_gcli_busy(False)
+        self._render_gcli_status(self._gcli_status)
 
     def _configure_gcli_failover(self):
         """Keep the local Anthropic gateway aligned with the current gcli state."""
@@ -1030,12 +1074,19 @@ class MainWindow:
                     message=f"检测失败：{error}")
             self._gcli_status = status
             self._render_gcli_status(status)
-            if status.ready and status.mode == MODE_ANTIGRAVITY:
-                self.root.after(60, self._refresh_gcli_quotas)
+            self._schedule_gcli_quota_refresh(status)
 
         self._run_gcli_worker(
             lambda: self.gcli2api.detect(self._gcli_password(), self._gcli_mode()), done,
             self._ui("正在检测…", "Checking…"))
+
+    def _schedule_gcli_quota_refresh(self, status: Gcli2ApiStatus,
+                                     delay_ms: int = 60) -> bool:
+        """Refresh Antigravity quota automatically whenever service becomes ready."""
+        if not status.ready or status.mode != MODE_ANTIGRAVITY:
+            return False
+        self.root.after(max(0, int(delay_ms)), self._refresh_gcli_quotas)
+        return True
 
     def _gcli_display_message(self, status: Gcli2ApiStatus) -> str:
         if self.lang == "zh":
@@ -1216,6 +1267,7 @@ class MainWindow:
             messagebox.showinfo(
                 self._ui("服务已启动", "Service started"),
                 self._gcli_start_success_message(status))
+            self._schedule_gcli_quota_refresh(status)
 
         self._run_gcli_worker(
             lambda: self.gcli2api.start_and_wait(
@@ -1373,22 +1425,22 @@ class MainWindow:
                      text_color=TEXT_PRIMARY if enabled else TEXT_MUTED).pack(side="left")
         if name == current:
             ctk.CTkLabel(top, text=t("selected_badge", self.lang), text_color=ACCENT,
-                         font=ctk.CTkFont(size=11, weight="bold")).pack(side="left", padx=PAD_SM)
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=PAD_SM)
         if not enabled:
             ctk.CTkLabel(top, text=t("status_disabled", self.lang), text_color=TEXT_MUTED).pack(side="right")
         elif not configured:
             ctk.CTkLabel(
                 top, text=self._ui("未配置", "Not configured"),
                 text_color=TEXT_MUTED,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(side="right")
+                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(side="right")
 
         meta = ctk.CTkFrame(card, fg_color="transparent")
         meta.pack(fill="x", padx=PAD_LG)
         ctk.CTkLabel(meta, text=provider.get("base_url") or "—", anchor="w",
-                     text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=10)).pack(fill="x")
+                     text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=11)).pack(fill="x")
         ctk.CTkLabel(meta, text=f"{provider.get('model') or '—'}   ·   {provider.get('masked_key')}",
                      anchor="w", text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(fill="x")
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x")
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_MD))
@@ -1407,7 +1459,7 @@ class MainWindow:
         status_text, status_color = self._provider_status(name, provider)
         status = ctk.CTkLabel(actions, text=status_text, text_color=status_color,
                               anchor="w",
-                              font=ctk.CTkFont(family=FONT_FAMILY, size=11))
+                              font=ctk.CTkFont(family=FONT_FAMILY, size=12))
         status.pack(side="left", padx=PAD_SM, fill="x", expand=True)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=58, height=30,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
@@ -1446,14 +1498,14 @@ class MainWindow:
         head = ctk.CTkFrame(frame, fg_color="transparent")
         head.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_XS))
         self.log_title = self._bind_text(ctk.CTkLabel(
-            head, text="", text_color=TEXT_SECONDARY, font=ctk.CTkFont(size=11)), "run_log")
+            head, text="", text_color=TEXT_SECONDARY, font=ctk.CTkFont(size=12)), "run_log")
         self.log_title.pack(side="left")
         self.clear_btn = self._bind_text(ctk.CTkButton(
             head, text="", width=50, height=24, fg_color="transparent",
             hover_color=BORDER, command=self._clear_log), "clear")
         self.clear_btn.pack(side="right")
         self.log_text = ctk.CTkTextbox(frame, height=78, fg_color=BG_INPUT,
-                                       font=ctk.CTkFont(family=FONT_MONO, size=10), state="disabled")
+                                       font=ctk.CTkFont(family=FONT_MONO, size=11), state="disabled")
         self.log_text.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
     def _on_language_change(self, display_name):
@@ -1477,6 +1529,8 @@ class MainWindow:
         # 更新 Gateway 面板语言
         if hasattr(self, 'gateway_panel'):
             self.gateway_panel.set_lang(self.lang)
+        if hasattr(self, "v2_dashboard_panel"):
+            self.v2_dashboard_panel.set_lang(self.lang)
         if hasattr(self, "gcli_state_label"):
             self.gcli_password_entry.configure(
                 placeholder_text=self._ui("填写 API_PASSWORD，不是 Google 密钥",
@@ -1896,7 +1950,7 @@ class MainWindow:
             text_color=TEXT_PRIMARY), "gateway_providers_tab")
         self.gateway_providers_title.pack(anchor="w")
         self.gateway_providers_hint = self._bind_text(ctk.CTkLabel(
-            title_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+            title_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
             text_color=TEXT_MUTED, anchor="w", justify="left"),
             "gateway_providers_hint")
         self.gateway_providers_hint.pack(anchor="w", pady=(PAD_XS, 0))
@@ -1939,7 +1993,7 @@ class MainWindow:
         ptype = provider.get("provider_type", "custom")
         type_text = SUPPORTED_PROVIDERS.get(ptype, {}).get("name", t("custom_provider", self.lang))
         ctk.CTkLabel(top, text=type_text, text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
                          side="left", padx=PAD_SM)
 
         # 操作按钮
@@ -1948,15 +2002,15 @@ class MainWindow:
 
         ctk.CTkButton(actions, text=t("test_key", self.lang), width=70, height=28,
                       fg_color=INFO, hover_color=INFO_DARK,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
                       command=lambda pid=provider.get("id", ""): self._test_provider_key(pid)).pack(side="left", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("edit", self.lang), width=50, height=28,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
                       command=lambda p=provider: self._show_edit_gateway_provider_dialog(p)).pack(side="right", padx=PAD_XS)
         ctk.CTkButton(actions, text=t("delete", self.lang), width=50, height=28,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=11),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
                       command=lambda p=provider: self._delete_gateway_provider(p)).pack(side="right")
 
         # 模型列表
@@ -1964,18 +2018,18 @@ class MainWindow:
         models_text = ", ".join([m.get("model_name", "") for m in models[:5]]) if models else "—"
         ctk.CTkLabel(card, text=f"{t('model', self.lang)}: {models_text}",
                      text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=11)).pack(
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
                          anchor="w", padx=PAD_LG, pady=(0, PAD_SM))
 
     def _show_add_gateway_provider_dialog(self):
         """显示添加供应商对话框"""
         ProviderGatewayDialog(self.root, self.lang, self.model_manager, None,
-                              callback=self._refresh_models_tab)
+                              callback=self._refresh_models_tab).grab_set()
 
     def _show_edit_gateway_provider_dialog(self, provider: dict):
         """显示编辑供应商对话框"""
         ProviderGatewayDialog(self.root, self.lang, self.model_manager, provider,
-                              callback=self._refresh_models_tab)
+                              callback=self._refresh_models_tab).grab_set()
 
     def _delete_gateway_provider(self, provider: dict):
         """删除 Gateway 供应商"""
@@ -2019,7 +2073,7 @@ class MainWindow:
             heading,
             text=self._ui("管理界面主题，并自动检测、安装和修复 Claude Code。",
                           "Manage the theme and detect, install or repair Claude Code."),
-            font=ctk.CTkFont(size=11), text_color=TEXT_MUTED).pack(anchor="w", pady=(PAD_XS, 0))
+            font=ctk.CTkFont(size=12), text_color=TEXT_MUTED).pack(anchor="w", pady=(PAD_XS, 0))
 
         appearance = ctk.CTkFrame(frame, fg_color=BG_SURFACE, corner_radius=12,
                                   border_width=1, border_color=BORDER)
@@ -2032,7 +2086,7 @@ class MainWindow:
         ctk.CTkLabel(
             appearance, text=self._ui("跟随系统会自动匹配 Windows 的浅色或深色模式。",
                                       "System mode follows the Windows light or dark setting."),
-            text_color=TEXT_MUTED, font=ctk.CTkFont(size=11)
+            text_color=TEXT_MUTED, font=ctk.CTkFont(size=12)
         ).grid(row=1, column=0, sticky="w", padx=PAD_LG, pady=(0, PAD_LG))
         theme_names = {
             "system": self._ui("跟随系统", "System"),
@@ -2061,7 +2115,7 @@ class MainWindow:
             env,
             text=self._ui("优先使用 WinGet，失败后自动尝试 Anthropic 官方 Windows 安装器。不会改动你的 API Key。",
                           "Uses WinGet first, then Anthropic's official Windows installer. API keys are never changed."),
-            text_color=TEXT_MUTED, font=ctk.CTkFont(size=11), anchor="w",
+            text_color=TEXT_MUTED, font=ctk.CTkFont(size=12), anchor="w",
             justify="left", wraplength=700
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=PAD_LG, pady=(0, PAD_MD))
 
@@ -2075,7 +2129,7 @@ class MainWindow:
         self.environment_status_label.grid(row=0, column=0, sticky="ew", padx=PAD_MD,
                                            pady=(PAD_MD, PAD_XS))
         self.environment_detail_label = ctk.CTkLabel(
-            status_box, text="", font=ctk.CTkFont(family=FONT_MONO, size=10),
+            status_box, text="", font=ctk.CTkFont(family=FONT_MONO, size=11),
             text_color=TEXT_MUTED, anchor="w", justify="left", wraplength=820)
         self.environment_detail_label.grid(row=1, column=0, sticky="ew", padx=PAD_MD,
                                            pady=(0, PAD_MD))
@@ -2106,7 +2160,7 @@ class MainWindow:
 
         self.environment_output = ctk.CTkTextbox(
             env, height=135, fg_color=BG_INPUT, border_width=1, border_color=BORDER,
-            text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=10),
+            text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=11),
             state="disabled")
         self.environment_output.grid(row=5, column=0, columnspan=2, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_LG))
@@ -2123,7 +2177,7 @@ class MainWindow:
         ).grid(row=0, column=0, sticky="w", padx=PAD_LG, pady=(PAD_LG, PAD_XS))
         self.update_status_label = ctk.CTkLabel(
             version_card, text=self._ui("可手动检查 GitHub Release", "Check GitHub Releases manually"),
-            font=ctk.CTkFont(size=11), text_color=TEXT_MUTED, anchor="w",
+            font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, anchor="w",
         )
         self.update_status_label.grid(row=1, column=0, sticky="ew", padx=PAD_LG,
                                       pady=(0, PAD_LG))
@@ -2326,7 +2380,7 @@ class MainWindow:
 
         # 日志文本区域
         self.logs_text = ctk.CTkTextbox(frame, height=400, fg_color=BG_INPUT,
-                                         font=ctk.CTkFont(family=FONT_MONO, size=10), state="disabled")
+                                         font=ctk.CTkFont(family=FONT_MONO, size=11), state="disabled")
         self.logs_text.pack(fill="both", expand=True)
 
     def _refresh_logs_tab(self):
@@ -2346,7 +2400,7 @@ class MainWindow:
             col = ctk.CTkFrame(self.logs_summary_frame, fg_color="transparent")
             col.pack(side="left", expand=True, padx=PAD_MD, pady=PAD_MD)
             ctk.CTkLabel(col, text=label, text_color=TEXT_MUTED,
-                         font=ctk.CTkFont(size=10)).pack()
+                         font=ctk.CTkFont(size=12)).pack()
             ctk.CTkLabel(col, text=value, text_color=TEXT_PRIMARY,
                          font=ctk.CTkFont(size=16, weight="bold")).pack()
 
@@ -2434,7 +2488,7 @@ class GcliExamplesDialog:
             button.pack(side="right")
             textbox = ctk.CTkTextbox(
                 card, height=110, fg_color=BG_INPUT,
-                font=ctk.CTkFont(family=FONT_MONO, size=10), wrap="word")
+                font=ctk.CTkFont(family=FONT_MONO, size=11), wrap="word")
             textbox.pack(fill="x", padx=PAD_MD, pady=(0, PAD_MD))
             textbox.insert("1.0", value)
             textbox.configure(state="disabled")
@@ -2468,10 +2522,9 @@ class ProviderDialog:
         self.dialog = ctk.CTkToplevel(parent)
         self.dialog.title(t("dialog_edit_title" if provider else "dialog_add_title", lang,
                             self.old_name) if provider else t("dialog_add_title", lang))
-        self.dialog.geometry("560x650")
-        self.dialog.resizable(False, False)
         self.dialog.configure(fg_color=BG_PRIMARY)
         self.dialog.transient(parent)
+        _configure_adaptive_dialog(self.dialog, parent, 560, 650)
         self._build()
 
     def _build(self):
@@ -2537,6 +2590,7 @@ class ProviderDialog:
             self.dialog.destroy()
 
     def grab_set(self):
+        self.dialog.wait_visibility()
         self.dialog.grab_set()
         self.dialog.focus_force()
 
@@ -2552,10 +2606,9 @@ class ProviderGatewayDialog:
         self.callback = callback
         self.dialog = ctk.CTkToplevel(parent)
         self.dialog.title(t("add_provider_title" if not provider else "edit_provider_title", lang))
-        self.dialog.geometry("520x600")
-        self.dialog.resizable(False, False)
         self.dialog.configure(fg_color=BG_PRIMARY)
         self.dialog.transient(parent)
+        _configure_adaptive_dialog(self.dialog, parent, 520, 600)
         self._build()
 
     def _build(self):
@@ -2603,7 +2656,7 @@ class ProviderGatewayDialog:
 
         # 提示
         self.note_label = ctk.CTkLabel(body, text=t("api_key_encrypted", self.lang),
-                                        text_color=INFO, font=ctk.CTkFont(size=10))
+                                        text_color=INFO, font=ctk.CTkFont(size=12))
         self.note_label.pack(anchor="w", pady=PAD_SM)
 
         # 错误标签
@@ -2678,5 +2731,6 @@ class ProviderGatewayDialog:
             self.error_label.configure(text=msg)
 
     def grab_set(self):
+        self.dialog.wait_visibility()
         self.dialog.grab_set()
         self.dialog.focus_force()

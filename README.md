@@ -1,8 +1,8 @@
-# Claude API Switcher V4.4.0
+# Claude API Switcher V4.5.0
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.4.0.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.5.0.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -18,6 +18,8 @@
 - 提供真实口径的额度监控：汇总 Claude Code 本机 Token、按供应商统计网关调用，并严格区分官方余额与不支持自动查询。
 - 提供按本地时间统计的近 7 天 Token 热力图，按星期和小时显示活跃度。
 - 使用原创蓝紫双向 API 路径图标，并同时应用到窗口、任务栏和 EXE。
+- 单实例运行：重复双击只会激活现有窗口，避免配置、数据库和本地端口互相争抢。
+- gcli2api 启停、额度读取和自动切换均有整体时间预算、并发保护、进程日志脱敏与部分成功提示。
 
 ## 界面分类
 
@@ -48,7 +50,7 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.4.0.exe`。
+1. 从 GitHub Releases 下载 `Claude API Switcher V4.5.0.exe`。
 2. 双击运行。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -162,7 +164,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-V4.4.0 在 V4.3.2 基础上增加项目级 Claude 路由污染检测、Gemini 自动切换总时间预算、当前供应商优先排序、用量页信息层级与热力图可读性优化，并修复 8787 网关配置无法读取 7861 gcli2api 实时额度的问题。
+V4.5.0 重点提升可靠性与日常舒适度：修复 Claude 云路由环境污染、gcli2api 并发启停与额度长时间阻塞、自动切换跨配置串线、损坏配置覆盖、Provider 优先级导入丢失、路由开关假状态和更新链接边界；同时改善暗色对比度、热力图字号、帮助提示、编辑对话框与中英文动态状态。完整说明见 [`docs/releases/v4.5.0-local.md`](docs/releases/v4.5.0-local.md)。
 
 ## 仓库边界
 

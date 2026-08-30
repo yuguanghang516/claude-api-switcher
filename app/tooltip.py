@@ -5,20 +5,34 @@ Tooltip 小白提示组件
 """
 import customtkinter as ctk
 
+from .theme import DARK, LIGHT
 
-# 与 gui.py 保持一致的设计令牌
-TEXT_PRIMARY = "#f1f5f9"
-TEXT_SECONDARY = "#94a3b8"
-TEXT_MUTED = "#64748b"
-BG_ELEVATED = "#252532"
-BG_SURFACE = "#1a1a24"
-BORDER = "#2d2d3d"
-ACCENT_LIGHT = "#a78bfa"
-INFO = "#06b6d4"
 
-# 24×24 点击区，圆圈视觉保持轻量
-BTN_WIDTH = 24
-BTN_HEIGHT = 24
+# 与其余页面共用语义色；CustomTkinter 会自动选择 light/dark 分量。
+TEXT_SECONDARY = (LIGHT.text_secondary, DARK.text_secondary)
+TEXT_MUTED = (LIGHT.text_muted, DARK.text_muted)
+BG_ELEVATED = (LIGHT.bg_elevated, DARK.bg_elevated)
+BG_SURFACE = (LIGHT.bg_surface, DARK.bg_surface)
+BORDER = (LIGHT.border_strong, DARK.border_strong)
+
+# 32×32 点击区：桌面端保持轻量，同时比原 24 px 更容易命中。
+BTN_WIDTH = 32
+BTN_HEIGHT = 32
+SCREEN_MARGIN = 8
+
+
+def clamp_tooltip_position(x: int, y: int, width: int, height: int,
+                           screen_x: int, screen_y: int,
+                           screen_width: int, screen_height: int):
+    """Clamp a tooltip rectangle to the visible virtual screen bounds."""
+    max_x = max(screen_x + SCREEN_MARGIN,
+                screen_x + screen_width - width - SCREEN_MARGIN)
+    max_y = max(screen_y + SCREEN_MARGIN,
+                screen_y + screen_height - height - SCREEN_MARGIN)
+    return (
+        min(max(x, screen_x + SCREEN_MARGIN), max_x),
+        min(max(y, screen_y + SCREEN_MARGIN), max_y),
+    )
 
 
 class TooltipButton:
@@ -35,6 +49,7 @@ class TooltipButton:
         self.lang = lang
         self.tooltip_window = None
         self._after_id = None
+        self._pinned = False
 
         # 只显示圆圈内问号；说明文字放在弹层中。
         self.btn = ctk.CTkButton(
@@ -42,13 +57,13 @@ class TooltipButton:
             text="?",
             width=BTN_WIDTH,
             height=BTN_HEIGHT,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="transparent",
             hover_color=BG_ELEVATED,
             text_color=TEXT_SECONDARY,
             border_width=1,
             border_color=TEXT_MUTED,
-            corner_radius=12,
+            corner_radius=16,
             command=self._on_click_toggle,
         )
 
@@ -57,6 +72,8 @@ class TooltipButton:
         self.btn.bind("<Leave>", self._on_leave)
         self.btn.bind("<Return>", self._on_click_toggle)
         self.btn.bind("<space>", self._on_click_toggle)
+        self.btn.bind("<Escape>", self._hide_tooltip)
+        self.btn.bind("<FocusOut>", self._on_focus_out)
 
     def pack(self, **kwargs):
         self.btn.pack(**kwargs)
@@ -74,22 +91,32 @@ class TooltipButton:
 
     def _on_enter(self, event=None):
         # 延迟显示，避免闪烁
+        if self.tooltip_window is not None:
+            return
         self._after_id = self.btn.after(300, self._show_tooltip)
 
     def _on_leave(self, event=None):
         if self._after_id:
             self.btn.after_cancel(self._after_id)
             self._after_id = None
-        self._hide_tooltip()
+        if not self._pinned:
+            self._hide_tooltip()
 
     def _on_click_toggle(self, event=None):
         # 点击切换显示/隐藏
-        if self.tooltip_window is not None:
+        if self.tooltip_window is not None and self._pinned:
             self._hide_tooltip()
         else:
+            self._pinned = True
             self._show_tooltip()
+            self.btn.focus_set()
+
+    def _on_focus_out(self, event=None):
+        if self._pinned:
+            self._hide_tooltip()
 
     def _show_tooltip(self):
+        self._after_id = None
         if self.tooltip_window is not None:
             return
 
@@ -102,6 +129,8 @@ class TooltipButton:
         self.tooltip_window.wm_overrideredirect(True)  # 无边框
         self.tooltip_window.attributes("-topmost", True)
         self.tooltip_window.configure(fg_color=BG_SURFACE)
+        self.tooltip_window.bind("<Escape>", self._hide_tooltip)
+        self.tooltip_window.bind("<FocusOut>", self._on_focus_out)
 
         # 提示内容
         frame = ctk.CTkFrame(
@@ -116,7 +145,7 @@ class TooltipButton:
         label = ctk.CTkLabel(
             frame,
             text=self.text,
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=12),
             text_color=TEXT_SECONDARY,
             justify="left",
             anchor="w",
@@ -128,13 +157,28 @@ class TooltipButton:
 
         # 确保窗口已渲染后调整位置（不超出屏幕）
         self.tooltip_window.update_idletasks()
-        screen_w = self.tooltip_window.winfo_screenwidth()
+        screen_x = self.tooltip_window.winfo_vrootx()
+        screen_y = self.tooltip_window.winfo_vrooty()
+        screen_w = self.tooltip_window.winfo_vrootwidth()
+        screen_h = self.tooltip_window.winfo_vrootheight()
         win_w = self.tooltip_window.winfo_width()
-        if x + win_w > screen_w:
+        win_h = self.tooltip_window.winfo_height()
+        if x + win_w + SCREEN_MARGIN > screen_x + screen_w:
             x = self.btn.winfo_rootx() - win_w - 8
-        self.tooltip_window.wm_geometry(f"+{x}+{y}")
+        if y + win_h + SCREEN_MARGIN > screen_y + screen_h:
+            y = self.btn.winfo_rooty() + self.btn.winfo_height() - win_h
+        x, y = clamp_tooltip_position(
+            x, y, win_w, win_h, screen_x, screen_y, screen_w, screen_h)
+        self.tooltip_window.wm_geometry(f"{x:+d}{y:+d}")
 
-    def _hide_tooltip(self):
+    def _hide_tooltip(self, event=None):
+        if self._after_id:
+            try:
+                self.btn.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
         if self.tooltip_window is not None:
             self.tooltip_window.destroy()
             self.tooltip_window = None
+        self._pinned = False

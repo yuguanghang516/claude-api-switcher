@@ -94,6 +94,48 @@ def test_saved_gcli_local_gateway_is_detected_for_restart():
     assert window._saved_gcli_uses_local_gateway() is True
 
 
+def test_ready_antigravity_service_schedules_automatic_quota_refresh():
+    window = MainWindow.__new__(MainWindow)
+    scheduled = []
+    window.root = type("Root", (), {
+        "after": lambda self, delay, callback: scheduled.append((delay, callback)),
+    })()
+    window._refresh_gcli_quotas = lambda: None
+
+    status = Gcli2ApiStatus(
+        state="ready", running=True, ready=True, mode=MODE_ANTIGRAVITY)
+
+    assert window._schedule_gcli_quota_refresh(status) is True
+    assert scheduled == [(60, window._refresh_gcli_quotas)]
+
+
+def test_enterprise_service_does_not_schedule_antigravity_quota_refresh():
+    window = MainWindow.__new__(MainWindow)
+    window.root = type("Root", (), {
+        "after": lambda self, delay, callback: pytest.fail("unexpected quota refresh"),
+    })()
+    window._refresh_gcli_quotas = lambda: None
+
+    status = Gcli2ApiStatus(
+        state="ready", running=True, ready=True, mode=MODE_GEMINI_CLI)
+
+    assert window._schedule_gcli_quota_refresh(status) is False
+
+
+def test_quota_worker_restores_persistent_service_status_copy():
+    window = MainWindow.__new__(MainWindow)
+    status = Gcli2ApiStatus(
+        state="ready", running=True, ready=True, mode=MODE_ANTIGRAVITY)
+    window._gcli_status = status
+    calls = []
+    window._set_gcli_busy = lambda busy: calls.append(("busy", busy))
+    window._render_gcli_status = lambda value: calls.append(("status", value))
+
+    window._finish_gcli_busy_status()
+
+    assert calls == [("busy", False), ("status", status)]
+
+
 def test_direct_gcli_connection_does_not_restart_local_gateway():
     window = MainWindow.__new__(MainWindow)
     window.gateway = type(

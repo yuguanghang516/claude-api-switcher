@@ -127,7 +127,9 @@ DARK = Palette(
     bg_input="#333333",
     text_primary="#f1f5f9",
     text_secondary="#94a3b8",
-    text_muted="#64748b",
+    # Keep muted copy visually subordinate while still meeting WCAG AA against
+    # the darkest input surface used by the app (#333333).
+    text_muted="#8d9db2",
     border="#3c3c3c",
     border_strong="#5a5a5a",
     accent="#4cc2ff",

@@ -1,0 +1,54 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-and-build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Check version consistency
+        run: python scripts/check_version_consistency.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q app tests scripts main.py
+
+      - name: Run tests
+        run: python -m pytest -p no:cacheprovider -q
+
+      - name: Build clean Windows executable
+        run: pyinstaller --clean --noconfirm --distpath dist build.spec
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-api-switcher-windows-x64-${{ github.sha }}
+          path: dist/Claude API Switcher V*.exe
+          if-no-files-found: error
+          retention-days: 14

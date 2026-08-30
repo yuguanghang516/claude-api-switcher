@@ -41,7 +41,8 @@ FONT_MONO = "Consolas"
 PAD_XS, PAD_SM, PAD_MD, PAD_LG, PAD_XL = 4, 8, 12, 16, 24
 FONT_PAGE_TITLE = 20
 FONT_SECTION_TITLE = 14
-FONT_BODY = 12
+FONT_BODY = 13
+FONT_HEATMAP_AUX = 11
 
 
 def is_gcli_balance(name: str, info) -> bool:
@@ -125,7 +126,7 @@ class TokenHeatmap:
         cell_width = max(12, (grid_width - gap_x * 23) / 24)
         cell_height = max(16, (height - top - bottom - gap_y * 6) / 7)
         text_color = self._color(TEXT_SECONDARY)
-        font = (FONT_FAMILY, 10)
+        font = (FONT_FAMILY, FONT_HEATMAP_AUX)
         border_color = self._color(BORDER)
         rows = self.data or []
         max_value = max((max(row.get("hours", [0]) or [0]) for row in rows), default=0)
@@ -134,7 +135,8 @@ class TokenHeatmap:
         for hour in (0, 6, 12, 18):
             x = left + hour * (cell_width + gap_x)
             self.canvas.create_text(x, 14, text=f"{hour}:00", anchor="w",
-                                    fill=text_color, font=(FONT_FAMILY, 10, "bold"))
+                                    fill=text_color,
+                                    font=(FONT_FAMILY, FONT_HEATMAP_AUX, "bold"))
 
         for row_index in range(7):
             row = rows[row_index] if row_index < len(rows) else {"date": "", "hours": [0] * 24}
@@ -163,7 +165,7 @@ class TokenHeatmap:
         high_text = "高" if self.lang == "zh" else "High"
         self.canvas.create_text(
             legend_x, legend_y, text=low_text, anchor="e",
-            fill=text_color, font=(FONT_FAMILY, 10))
+            fill=text_color, font=(FONT_FAMILY, FONT_HEATMAP_AUX))
         start_x = legend_x + 8
         for index, color in enumerate(levels):
             x1 = start_x + index * 22
@@ -172,7 +174,7 @@ class TokenHeatmap:
                 fill=color, outline=border_color, width=1)
         self.canvas.create_text(
             start_x + len(levels) * 22, legend_y, text=high_text, anchor="w",
-            fill=text_color, font=(FONT_FAMILY, 10))
+            fill=text_color, font=(FONT_FAMILY, FONT_HEATMAP_AUX))
 
     def _on_motion(self, event):
         cell = next((item for item in self._cells
@@ -194,7 +196,8 @@ class TokenHeatmap:
         x = min(max(event.x, 120), max(120, width - 120))
         y = max(24, event.y - 34)
         text_id = self.canvas.create_text(
-            x, y, text=text, fill="#ffffff", font=(FONT_FAMILY, 10, "bold"),
+            x, y, text=text, fill="#ffffff",
+            font=(FONT_FAMILY, FONT_HEATMAP_AUX, "bold"),
             tags=("tooltip",))
         bbox = self.canvas.bbox(text_id)
         if bbox:
@@ -433,7 +436,9 @@ class V2DashboardPanel:
         self.routing_title.pack(side="left")
 
         # 路由规则开关
-        self.routing_switch_var = ctk.BooleanVar(value=True)
+        initial_routing = self._read_routing_enabled(True)
+        self._routing_switch_last = initial_routing
+        self.routing_switch_var = ctk.BooleanVar(value=initial_routing)
         self.routing_switch = ctk.CTkSwitch(
             head, text=self._ui("启用", "Enabled"), variable=self.routing_switch_var,
             command=self._toggle_routing)
@@ -699,6 +704,10 @@ class V2DashboardPanel:
 
     def _refresh_routing_display(self):
         """刷新路由规则显示"""
+        current = self._read_routing_enabled(
+            getattr(self, "_routing_switch_last", True))
+        self._routing_switch_last = current
+        self.routing_switch_var.set(current)
         for widget in self.routing_rules_frame.winfo_children():
             widget.destroy()
 
@@ -740,7 +749,9 @@ class V2DashboardPanel:
 
         targets = self.gateway.failover_engine.get_target_status()
         if not targets:
-            ctk.CTkLabel(self.failover_targets_frame, text="暂无故障转移目标",
+            ctk.CTkLabel(
+                         self.failover_targets_frame,
+                         text=self._ui("暂无故障转移目标", "No failover targets"),
                          text_color=TEXT_MUTED,
                          font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(pady=PAD_SM)
             return
@@ -776,7 +787,8 @@ class V2DashboardPanel:
 
         # 健康状态
         is_healthy = target.get("is_healthy", True)
-        health_text = "健康" if is_healthy else "异常"
+        health_text = (self._ui("健康", "Healthy") if is_healthy
+                       else self._ui("异常", "Unhealthy"))
         health_color = SUCCESS if is_healthy else DANGER
         ctk.CTkLabel(row, text=health_text, text_color=health_color,
                      font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(
@@ -785,7 +797,8 @@ class V2DashboardPanel:
         # 连续失败次数
         failures = target.get("consecutive_failures", 0)
         if failures > 0:
-            ctk.CTkLabel(row, text=f"失败{failures}次", text_color=WARNING,
+            failure_text = self._ui(f"失败 {failures} 次", f"{failures} failures")
+            ctk.CTkLabel(row, text=failure_text, text_color=WARNING,
                          font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(
                              side="right", padx=PAD_XS)
 
@@ -799,15 +812,19 @@ class V2DashboardPanel:
 
         history = self.gateway.notifier.get_history(10)
         if not history:
-            self.notif_text.insert("end", "暂无通知\n")
+            self.notif_text.insert(
+                "end", self._ui("暂无通知\n", "No notifications\n"))
         else:
             for notif in reversed(history):
                 ts = datetime.fromtimestamp(notif.timestamp).strftime("%H:%M:%S")
                 priority_label = {
-                    "low": "[提示]", "medium": "[注意]",
-                    "high": "[重要]", "critical": "[严重]",
+                    "low": self._ui("[提示]", "[Info]"),
+                    "medium": self._ui("[注意]", "[Notice]"),
+                    "high": self._ui("[重要]", "[Important]"),
+                    "critical": self._ui("[严重]", "[Critical]"),
                 }
-                label = priority_label.get(notif.priority.value, "[提示]")
+                label = priority_label.get(
+                    notif.priority.value, self._ui("[提示]", "[Info]"))
                 self.notif_text.insert("end", f"{ts} {label} {notif.title}\n")
                 if notif.message:
                     msg = notif.message[:80].replace("\n", " ")
@@ -816,11 +833,47 @@ class V2DashboardPanel:
         self.notif_text.see("end")
         self.notif_text.configure(state="disabled")
 
+    def _read_routing_enabled(self, fallback: bool = True) -> bool:
+        """Read the persisted router state without letting UI refresh fail."""
+        config = getattr(self.gateway, "v2_config", None)
+        if config is None or not hasattr(config, "is_routing_enabled"):
+            return bool(fallback)
+        try:
+            return bool(config.is_routing_enabled())
+        except Exception:
+            return bool(fallback)
+
     def _toggle_routing(self):
-        """切换路由开关"""
-        enabled = self.routing_switch_var.get()
-        if hasattr(self.gateway, 'v2_config'):
-            self.gateway.v2_config.set_routing_enabled(enabled)
+        """Persist the switch state, rolling the control back on failure."""
+        desired = bool(self.routing_switch_var.get())
+        previous = bool(getattr(self, "_routing_switch_last", not desired))
+        config = getattr(self.gateway, "v2_config", None)
+        error = ""
+        try:
+            if config is None or not hasattr(config, "set_routing_enabled"):
+                error = self._ui("路由配置不可用", "Routing configuration is unavailable")
+                saved = False
+            else:
+                saved = bool(config.set_routing_enabled(desired))
+        except Exception as exc:
+            saved = False
+            error = str(exc)[:160]
+
+        actual = self._read_routing_enabled(previous)
+        if not saved or actual != desired:
+            self.routing_switch_var.set(actual)
+            self._routing_switch_last = actual
+            reason = error or self._ui("配置文件未能写入", "The configuration file could not be written")
+            messagebox.showerror(
+                self._ui("路由设置未保存", "Routing setting not saved"),
+                self._ui(
+                    f"路由开关已恢复为原状态。原因：{reason}\n请检查配置目录的写入权限后重试。",
+                    f"The switch was restored to its previous state. Reason: {reason}\n"
+                    "Check write access to the configuration directory and try again."),
+                parent=self.parent,
+            )
+            return
+        self._routing_switch_last = desired
 
     def _reset_failover(self):
         """重置故障转移"""
