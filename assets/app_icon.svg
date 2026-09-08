@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
-<rect x="8" y="8" width="240" height="240" rx="56" fill="#2563EB"/>
-<polygon points="60,72 150,72 150,49 198,94 150,139 150,115 60,115" fill="#FFFFFF"/>
-<polygon points="196,141 106,141 106,117 58,162 106,207 106,184 196,184" fill="#B8D5FF"/>
+<rect x="8" y="8" width="240" height="240" rx="58" fill="#12263A"/>
+<path d="M184,60 L117,60 C81,60 54,87 54,122 L54,156 L86,124 L86,122 C86,104 99,91 117,91 L153,91 L184,60 Z" fill="#F4F8FC"/>
+<path d="M184,60 L117,60 C81,60 54,87 54,122 L54,156 L86,124 L86,122 C86,104 99,91 117,91 L153,91 L184,60 Z" transform="rotate(180 128 128)" fill="#65D6CD"/>
 </svg>
