@@ -1,8 +1,8 @@
-# Claude API Switcher V4.5.0
+# Claude API Switcher V4.6.0
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.5.0.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.6.0.exe`，不需要 Python。
 
 ## 能做什么
 
@@ -17,13 +17,13 @@
 - Antigravity 接入 Claude 时可走本软件 `/v1/messages` 网关：真实调用返回 429 后，优先在同系列文本模型中自动切换，最多尝试 3 个不同模型；配额快照与实测冲突时以真实 429 为准。
 - 提供真实口径的额度监控：汇总 Claude Code 本机 Token、按供应商统计网关调用，并严格区分官方余额与不支持自动查询。
 - 提供按本地时间统计的近 7 天 Token 热力图，按星期和小时显示活跃度。
-- 使用原创蓝紫双向 API 路径图标，并同时应用到窗口、任务栏和 EXE。
+- 使用简洁的蓝色双向切换图标，并同时应用到窗口、任务栏和 EXE。
 - 单实例运行：重复双击只会激活现有窗口，避免配置、数据库和本地端口互相争抢。
 - gcli2api 启停、额度读取和自动切换均有整体时间预算、并发保护、进程日志脱敏与部分成功提示。
 
 ## 界面分类
 
-顶部只保留 5 个按任务划分的主入口：
+左侧固定导航保留 5 个按任务划分的主入口：
 
 | 入口 | 用途 |
 |---|---|
@@ -50,7 +50,7 @@
 
 ### 使用已打包的 EXE
 
-1. 从 GitHub Releases 下载 `Claude API Switcher V4.5.0.exe`。
+1. 从 GitHub Releases 下载并运行 `Claude API Switcher V4.6.0.exe`。
 2. 双击运行。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -164,7 +164,7 @@ python -m pytest tests -q
 pyinstaller --noconfirm --distpath release build.spec
 ```
 
-V4.5.0 重点提升可靠性与日常舒适度：修复 Claude 云路由环境污染、gcli2api 并发启停与额度长时间阻塞、自动切换跨配置串线、损坏配置覆盖、Provider 优先级导入丢失、路由开关假状态和更新链接边界；同时改善暗色对比度、热力图字号、帮助提示、编辑对话框与中英文动态状态。完整说明见 [`docs/releases/v4.5.0.md`](docs/releases/v4.5.0.md)。
+V4.6.0 适配新版 gcli2api 的“抗截断/”模型别名，合并重复项，并在同档 Gemini 模型中优先排列更新的版本。Gemini 3.8 Flash 使用上游动态返回的真实模型 ID；具体可用性取决于凭证和配额。完整说明见 [`docs/releases/v4.6.0.md`](docs/releases/v4.6.0.md)。
 
 ## 仓库边界
 

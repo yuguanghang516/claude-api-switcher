@@ -39,9 +39,9 @@ WARNING = (LIGHT.warning, DARK.warning)
 FONT_FAMILY = "Microsoft YaHei UI"
 FONT_MONO = "Consolas"
 PAD_XS, PAD_SM, PAD_MD, PAD_LG, PAD_XL = 4, 8, 12, 16, 24
-FONT_PAGE_TITLE = 20
-FONT_SECTION_TITLE = 14
-FONT_BODY = 13
+FONT_PAGE_TITLE = 22
+FONT_SECTION_TITLE = 16
+FONT_BODY = 14
 FONT_HEATMAP_AUX = 11
 
 
@@ -294,7 +294,7 @@ class V2DashboardPanel:
     def _build(self):
         """构建用量监控仪表板。"""
         self.main_frame = ctk.CTkScrollableFrame(self.parent, fg_color=BG_PRIMARY)
-        self.main_frame.pack(fill="both", expand=True)
+        self.main_frame.pack(fill="both", expand=True, padx=PAD_LG, pady=PAD_LG)
 
         # 余额监控区
         self._build_balance_section()
@@ -327,7 +327,7 @@ class V2DashboardPanel:
         self.balance_title.pack(side="left")
 
         self.refresh_balance_btn = ctk.CTkButton(
-            head, text=self._ui("刷新全部", "Refresh All"), width=76, height=28,
+            head, text=self._ui("刷新全部", "Refresh All"), width=76, height=36,
             fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY),
             command=self._refresh_balance)
@@ -344,7 +344,7 @@ class V2DashboardPanel:
             text=self._ui(
                 "数据口径：Claude 本机统计和网关日志不等于供应商账单；只有标注“官方余额”的数值才是账户余额。不会读取聊天内容。",
                 "Scope: local Claude usage and gateway logs are not provider bills. Only values marked Official Balance are account balances. Chat content is never read."),
-            anchor="w", justify="left", wraplength=860,
+            anchor="w", justify="left", wraplength=760,
             text_color=WARNING,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
         self.balance_scope_note.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
@@ -357,7 +357,7 @@ class V2DashboardPanel:
         self.claude_usage_title.pack(fill="x", padx=PAD_LG)
         self.claude_usage_summary = ctk.CTkLabel(
             card, text=self._ui("正在读取本机 Token 记录…", "Reading local token records…"),
-            anchor="w", justify="left", wraplength=860,
+            anchor="w", justify="left", wraplength=760,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY),
             text_color=TEXT_SECONDARY)
         self.claude_usage_summary.pack(fill="x", padx=PAD_LG, pady=(PAD_XS, PAD_SM))
@@ -392,7 +392,7 @@ class V2DashboardPanel:
             text=self._ui(
                 "模型名来自本机 Claude 会话历史，只说明过去用过什么，不代表当前正在连接的供应商。",
                 "Model names come from local Claude session history and do not indicate the currently connected provider."),
-            anchor="w", justify="left", wraplength=860,
+            anchor="w", justify="left", wraplength=760,
             text_color=TEXT_SECONDARY,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY))
         self.claude_models_note.pack(fill="x", padx=PAD_LG, pady=(0, PAD_XS))
@@ -464,7 +464,7 @@ class V2DashboardPanel:
         self.failover_title.pack(side="left")
 
         self.reset_failover_btn = ctk.CTkButton(
-            head, text=self._ui("重置", "Reset"), width=60, height=28,
+            head, text=self._ui("重置", "Reset"), width=60, height=36,
             fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY),
             command=self._reset_failover)
@@ -697,7 +697,7 @@ class V2DashboardPanel:
                          row=0, column=2, sticky="e", padx=PAD_SM, pady=PAD_SM)
         if info.portal_url and not gcli_row:
             ctk.CTkButton(
-                row, text=self._ui("打开平台", "Open Portal"), width=74, height=26,
+                row, text=self._ui("打开平台", "Open Portal"), width=74, height=36,
                 fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
                 command=lambda url=info.portal_url: webbrowser.open(url)).grid(
                     row=0, column=3, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
@@ -727,7 +727,7 @@ class V2DashboardPanel:
         status_color = SUCCESS if rule.enabled else TEXT_MUTED
         status_text = "●" if rule.enabled else "○"
         ctk.CTkLabel(row, text=status_text, text_color=status_color,
-                     font=ctk.CTkFont(size=12)).pack(side="left", padx=PAD_MD, pady=PAD_XS)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(side="left", padx=PAD_MD, pady=PAD_XS)
 
         ctk.CTkLabel(row, text=rule.description, text_color=TEXT_SECONDARY,
                      font=ctk.CTkFont(family=FONT_FAMILY, size=FONT_BODY)).pack(
@@ -777,7 +777,7 @@ class V2DashboardPanel:
             status_icon = "○"
 
         ctk.CTkLabel(row, text=status_icon, text_color=status_color,
-                     font=ctk.CTkFont(size=12)).pack(side="left", padx=PAD_MD, pady=PAD_XS)
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(side="left", padx=PAD_MD, pady=PAD_XS)
 
         # 模型名称
         ctk.CTkLabel(row, text=target.get("model_name", "unknown"),

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
 import customtkinter as ctk
+from PIL import Image
 from tkinter import filedialog, messagebox
 
 from .claude_launcher import ClaudeLauncher
@@ -176,6 +177,8 @@ def provider_display_sort_key(provider, current_name: str):
 
 class MainWindow:
     def __init__(self, data_dir: str, logs_dir: str):
+        from .theme import apply_widget_defaults
+        apply_widget_defaults()
         self.logger = AppLogger(logs_dir)
         self.config = ConfigManager(data_dir)
         theme.apply_mode(self.config.get_theme())
@@ -226,8 +229,8 @@ class MainWindow:
         except Exception:
             # An unavailable icon must never prevent the manager from opening.
             pass
-        self.root.geometry("1080x820")
-        self.root.minsize(900, 680)
+        self.root.geometry("1240x860")
+        self.root.minsize(1100, 720)
         self.root.configure(fg_color=BG_PRIMARY)
         self._build_ui()
         self._resolve_project_directory()
@@ -280,7 +283,17 @@ class MainWindow:
         # === 一级导航：按用户任务分类，网关细项放入二级导航 ===
         self.tab_frame = ctk.CTkFrame(self.root, fg_color=BG_SURFACE, corner_radius=0,
                                        border_width=1, border_color=BORDER)
-        self.tab_frame.pack(fill="x", padx=0, pady=0)
+        self.tab_frame.configure(width=184)
+        self.tab_frame.pack(side="left", fill="y")
+        self.tab_frame.pack_propagate(False)
+        brand = ctk.CTkFrame(self.tab_frame, fg_color="transparent")
+        brand.pack(fill="x", padx=20, pady=(28, 32))
+        self.brand_image = ctk.CTkImage(Image.open(_resource_path("assets/app_icon.png")), size=(44, 44))
+        ctk.CTkLabel(brand, text="", image=self.brand_image).pack(anchor="w", pady=(0, 12))
+        ctk.CTkLabel(brand, text="CLAUDE", anchor="w", text_color=TEXT_PRIMARY,
+                     font=ctk.CTkFont(family="Segoe UI", size=23, weight="bold")).pack(fill="x")
+        ctk.CTkLabel(brand, text="API SWITCHER", anchor="w", text_color=TEXT_SECONDARY,
+                     font=ctk.CTkFont(family="Segoe UI", size=14)).pack(fill="x")
 
         self.tab_buttons = {}
         self.main_tabs = [
@@ -291,21 +304,26 @@ class MainWindow:
             ("settings_tab", "settings"),
         ]
         for i, (key, name) in enumerate(self.main_tabs):
-            self.tab_frame.grid_columnconfigure(i, weight=1, uniform="main-nav")
             btn = ctk.CTkButton(
-                self.tab_frame, text=t(key, self.lang), height=38,
+                self.tab_frame, text=t(key, self.lang), height=46, width=152,
                 fg_color="transparent" if i != 0 else ACCENT,
                 hover_color=ACCENT_HOVER if i == 0 else BG_ELEVATED,
                 text_color=ACCENT_TEXT if i == 0 else TEXT_PRIMARY,
                 corner_radius=8,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
                 command=lambda tab_name=name: self._switch_tab(tab_name))
-            btn.grid(row=0, column=i, sticky="ew", padx=PAD_XS, pady=PAD_SM)
+            btn.pack(fill="x", padx=12, pady=4)
             self.tab_buttons[name] = btn
+
+        footer = ctk.CTkFrame(self.tab_frame, fg_color="transparent")
+        footer.pack(side="bottom", fill="x", padx=20, pady=24)
+        ctk.CTkFrame(footer, height=1, fg_color=BORDER).pack(fill="x", pady=(0, 16))
+        ctk.CTkLabel(footer, text=APP_VERSION_NAME, anchor="w", text_color=TEXT_MUTED,
+                     font=ctk.CTkFont(family="Segoe UI", size=14)).pack(fill="x")
 
         # === 内容区容器 ===
         self.content_frame = ctk.CTkFrame(self.root, fg_color=BG_PRIMARY)
-        self.content_frame.pack(fill="both", expand=True)
+        self.content_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
 
         # API 切换：当前状态、Claude 启动和 Claude 供应商
         self.switcher_frame = ctk.CTkFrame(self.content_frame, fg_color=BG_PRIMARY)
@@ -355,12 +373,12 @@ class MainWindow:
         for i, (key, name) in enumerate(self.gateway_subtabs):
             self.gateway_subnav.grid_columnconfigure(i, weight=1, uniform="gateway-subnav")
             button = ctk.CTkButton(
-                self.gateway_subnav, text=t(key, self.lang), height=34,
+                self.gateway_subnav, text=t(key, self.lang), height=38,
                 fg_color=ACCENT if i == 0 else "transparent",
                 hover_color=ACCENT_HOVER if i == 0 else BG_ELEVATED,
                 text_color=ACCENT_TEXT if i == 0 else TEXT_PRIMARY,
                 corner_radius=7,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
                 command=lambda tab_name=name: self._switch_gateway_subtab(tab_name))
             button.grid(row=0, column=i, sticky="ew", padx=PAD_XS, pady=PAD_XS)
             self.gateway_sub_buttons[name] = button
@@ -416,10 +434,10 @@ class MainWindow:
         left.pack(side="left")
         self.title_label = self._bind_text(ctk.CTkLabel(
             left, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=22, weight="bold"),
-            text_color=TEXT_PRIMARY), "app_title")
+            text_color=TEXT_PRIMARY), "providers_tab")
         self.title_label.pack(anchor="w")
         self.subtitle_label = self._bind_text(ctk.CTkLabel(
-            left, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            left, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=TEXT_SECONDARY), "app_subtitle_safe")
         self.subtitle_label.pack(anchor="w")
 
@@ -429,18 +447,18 @@ class MainWindow:
         self.lang_var = ctk.StringVar(value=display_lang)
         self.lang_combo = ctk.CTkComboBox(
             right, values=[name for name, _ in LANGUAGES], variable=self.lang_var,
-            width=82, height=30, command=self._on_language_change,
+            width=82, height=36, command=self._on_language_change,
             fg_color=BG_ELEVATED, border_color=BORDER, button_color=BORDER,
             button_hover_color=ACCENT, dropdown_fg_color=BG_SURFACE)
         self.lang_combo.pack(side="left", padx=(0, PAD_SM))
         self.export_btn = self._bind_text(ctk.CTkButton(
-            right, text="", width=64, height=30, fg_color=BG_ELEVATED,
+            right, text="", width=64, height=36, fg_color=BG_ELEVATED,
             hover_color=BORDER, border_width=1, border_color=BORDER,
             text_color=TEXT_PRIMARY,
             command=self._export_config), "export")
         self.export_btn.pack(side="left", padx=PAD_XS)
         self.import_btn = self._bind_text(ctk.CTkButton(
-            right, text="", width=64, height=30, fg_color=BG_ELEVATED,
+            right, text="", width=64, height=36, fg_color=BG_ELEVATED,
             hover_color=BORDER, border_width=1, border_color=BORDER,
             text_color=TEXT_PRIMARY,
             command=self._import_config), "import")
@@ -480,16 +498,16 @@ class MainWindow:
         self._help(label_frame, "tooltip_project_dir", side="left", padx=(PAD_XS, PAD_SM))
         self.project_dir_var = ctk.StringVar(value=self.config.get_default_project_dir())
         self.project_entry = ctk.CTkEntry(
-            project_row, textvariable=self.project_dir_var, height=34,
+            project_row, textvariable=self.project_dir_var, height=38,
             fg_color=BG_INPUT, border_color=BORDER, text_color=TEXT_PRIMARY)
         self.browse_btn = self._bind_text(ctk.CTkButton(
-            project_row, text="", width=76, height=34, fg_color=BG_ELEVATED,
+            project_row, text="", width=76, height=38, fg_color=BG_ELEVATED,
             hover_color=BORDER, text_color=TEXT_PRIMARY,
             command=self._browse_project_dir), "browse")
         self.browse_btn.pack(side="right")
         self.project_source_label = ctk.CTkLabel(
             project_row, text="", width=82,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=INFO)
         self.project_source_label.pack(side="right", padx=(0, PAD_SM))
         self.project_entry.pack(side="left", fill="x", expand=True, padx=(0, PAD_SM))
@@ -497,11 +515,11 @@ class MainWindow:
         self.quick_launch_btn = self._bind_text(ctk.CTkButton(
             card, text="", height=48, font=ctk.CTkFont(
                 family=FONT_FAMILY, size=15, weight="bold"),
-            fg_color=SUCCESS, hover_color=SUCCESS_DARK, corner_radius=10,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER, text_color=ACCENT_TEXT, corner_radius=10,
             command=self._quick_launch), "quick_launch")
         self.quick_launch_btn.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_SM))
         self.session_note = self._bind_text(ctk.CTkLabel(
-            card, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            card, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=TEXT_SECONDARY), "session_only_note")
         self.session_note.pack(pady=(0, PAD_MD))
 
@@ -510,11 +528,11 @@ class MainWindow:
         label_box.grid(row=row, column=0, sticky="w", pady=PAD_XS)
         label = self._bind_text(ctk.CTkLabel(
             label_box, text="", width=112, anchor="w", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), key)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), key)
         label.pack(side="left")
         value = ctk.CTkLabel(
             parent, text="—", anchor="w", text_color=TEXT_PRIMARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14))
         value.grid(row=row, column=1, sticky="ew", pady=PAD_XS)
         return value
 
@@ -524,7 +542,7 @@ class MainWindow:
         saved_password, saved_mode, saved_model = self._saved_gcli_connection()
         card = ctk.CTkFrame(
             parent, fg_color=BG_SURFACE, corner_radius=12,
-            border_width=1, border_color=GEMINI_ACCENT)
+            border_width=1, border_color=BORDER)
         card.pack(fill="x", pady=(0, PAD_LG))
         card.grid_columnconfigure(1, weight=1)
 
@@ -536,13 +554,13 @@ class MainWindow:
             text_color=GEMINI_ACCENT), "gcli_title")
         self.gcli_title_label.pack(side="left")
         self.gcli_state_label = ctk.CTkLabel(
-            head, text="○ 等待检测", font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+            head, text="○ 等待检测", font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
             text_color=TEXT_MUTED)
         self.gcli_state_label.pack(side="right")
 
         self.gcli_subtitle_label = self._bind_text(ctk.CTkLabel(
-            card, text="", anchor="w", justify="left", wraplength=900,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            card, text="", anchor="w", justify="left", wraplength=760,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=TEXT_MUTED), "gcli_subtitle")
         self.gcli_subtitle_label.grid(row=1, column=0, columnspan=4, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_MD))
@@ -553,57 +571,57 @@ class MainWindow:
         credential.grid_columnconfigure(1, weight=1)
         self.gcli_password_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_password")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_password")
         self.gcli_password_label.grid(row=0, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
         self.gcli_password_var = ctk.StringVar(value=saved_password)
         password_box = ctk.CTkFrame(credential, fg_color="transparent")
         password_box.grid(row=0, column=1, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
         self.gcli_password_entry = ctk.CTkEntry(
-            password_box, textvariable=self.gcli_password_var, show="•", height=34,
+            password_box, textvariable=self.gcli_password_var, show="•", height=38,
             placeholder_text=self._ui("填写 API_PASSWORD，不是 Google 密钥",
                                       "Enter API_PASSWORD, not a Google key"),
             fg_color=BG_INPUT, border_color=BORDER)
         self.gcli_password_entry.pack(side="left", fill="x", expand=True)
         self._gcli_password_visible = False
         self.gcli_password_eye = ctk.CTkButton(
-            password_box, text=self._ui("查看", "Show"), width=52, height=34,
+            password_box, text=self._ui("查看", "Show"), width=52, height=38,
             fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             command=self._toggle_gcli_password_visibility)
         self.gcli_password_eye.pack(side="left", padx=(PAD_XS, 0))
         self.gcli_generate_button = ctk.CTkButton(
-            credential, text=self._ui("生成并复制", "Generate & Copy"), width=100, height=34,
+            credential, text=self._ui("生成并复制", "Generate & Copy"), width=100, height=38,
             fg_color=BG_INPUT, hover_color=BORDER, text_color=TEXT_PRIMARY,
             command=self._generate_gcli_password)
         self.gcli_generate_button.grid(row=0, column=2, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
         self.gcli_model_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_model")
-        self.gcli_model_label.grid(row=0, column=3, sticky="w", padx=(0, PAD_SM), pady=PAD_SM)
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_model")
+        self.gcli_model_label.grid(row=1, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
         self.gcli_model_var = ctk.StringVar(value=saved_model or "gemini-2.5-pro")
         self.gcli_model_combo = ctk.CTkComboBox(
             credential, values=["gemini-2.5-pro"], variable=self.gcli_model_var,
-            width=230, height=34, fg_color=BG_INPUT, border_color=BORDER)
-        self.gcli_model_combo.grid(row=0, column=4, sticky="e", padx=(0, PAD_MD), pady=PAD_SM)
+            width=230, height=38, fg_color=BG_INPUT, border_color=BORDER)
+        self.gcli_model_combo.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
 
         self.gcli_mode_label = self._bind_text(ctk.CTkLabel(
             credential, text="", text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode")
-        self.gcli_mode_label.grid(row=1, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=(0, PAD_SM))
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_mode")
+        self.gcli_mode_label.grid(row=2, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=(0, PAD_SM))
         self.gcli_mode_var = ctk.StringVar(value=saved_mode)
         mode_box = ctk.CTkFrame(credential, fg_color="transparent")
-        mode_box.grid(row=1, column=1, columnspan=4, sticky="ew", padx=(0, PAD_MD), pady=(0, PAD_SM))
+        mode_box.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(0, PAD_MD), pady=(0, PAD_SM))
         self.gcli_antigravity_radio = self._bind_text(ctk.CTkRadioButton(
             mode_box, text="", variable=self.gcli_mode_var, value=MODE_ANTIGRAVITY,
             command=self._on_gcli_mode_change, fg_color=GEMINI_ACCENT,
             hover_color=GEMINI_HOVER,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode_antigravity")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_mode_antigravity")
         self.gcli_antigravity_radio.pack(side="left", padx=(0, PAD_LG))
         self.gcli_enterprise_radio = self._bind_text(ctk.CTkRadioButton(
             mode_box, text="", variable=self.gcli_mode_var, value=MODE_GEMINI_CLI,
             command=self._on_gcli_mode_change, fg_color=GEMINI_ACCENT,
             hover_color=GEMINI_HOVER,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12)), "gcli_mode_enterprise")
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_mode_enterprise")
         self.gcli_enterprise_radio.pack(side="left")
 
         self.gcli_password_help = ctk.CTkLabel(
@@ -611,16 +629,16 @@ class MainWindow:
             text=self._ui(
                 "密码来源：服务未运行时由你自己设置；若已从终端启动，请填写终端使用的 API_PASSWORD。不是 Google API Key。",
                 "Password source: choose it yourself before startup. If already started in a terminal, enter its API_PASSWORD. Not a Google API key."),
-            anchor="w", justify="left", wraplength=850,
+            anchor="w", justify="left", wraplength=760,
             text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
-        self.gcli_password_help.grid(row=2, column=0, columnspan=5, sticky="ew",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14))
+        self.gcli_password_help.grid(row=3, column=0, columnspan=3, sticky="ew",
                                     padx=PAD_MD, pady=(0, PAD_SM))
 
         self.gcli_detail_label = ctk.CTkLabel(
             card, text=f"{DEFAULT_BASE_URL}  ·  {self.gcli2api.install_dir}",
-            anchor="w", justify="left", wraplength=900, text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_MONO, size=12))
+            anchor="w", justify="left", wraplength=760, text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_MONO, size=14))
         self.gcli_detail_label.grid(row=3, column=0, columnspan=4, sticky="ew",
                                    padx=PAD_LG, pady=(0, PAD_SM))
 
@@ -631,42 +649,42 @@ class MainWindow:
         self.gcli_guide_title = self._bind_text(ctk.CTkLabel(
             guide, text="", anchor="w",
             text_color=GEMINI_ACCENT,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold")),
             "gcli_next_step")
         self.gcli_guide_title.grid(row=0, column=0, sticky="ew", padx=PAD_MD,
                                   pady=(PAD_MD, PAD_XS))
         self.gcli_guide_label = ctk.CTkLabel(
             guide,
             text=gcli_guide_text(self._gcli_status, False, self.lang, MODE_ANTIGRAVITY),
-            anchor="w", justify="left", wraplength=880,
+            anchor="w", justify="left", wraplength=760,
             text_color=TEXT_PRIMARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="normal"))
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="normal"))
         self.gcli_guide_label.grid(row=1, column=0, sticky="ew", padx=PAD_MD,
                                   pady=(0, PAD_MD))
         self.gcli_password_var.trace_add("write", self._on_gcli_password_change)
 
         quota_card = ctk.CTkFrame(card, fg_color=BG_ELEVATED, corner_radius=8)
-        quota_card.grid(row=5, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+        quota_card.grid(row=6, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                         pady=(0, PAD_SM))
         quota_head = ctk.CTkFrame(quota_card, fg_color="transparent")
         quota_head.pack(fill="x", padx=PAD_MD, pady=(PAD_MD, PAD_XS))
         self.gcli_quota_title = self._bind_text(ctk.CTkLabel(
             quota_head, text="", text_color=TEXT_PRIMARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")),
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold")),
             "gcli_quota_title")
         self.gcli_quota_title.pack(side="left")
         self.gcli_quota_summary = ctk.CTkLabel(
             quota_head, text=self._ui("等待服务检测", "Waiting for service check"),
             text_color=TEXT_MUTED,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14))
         self.gcli_quota_summary.pack(side="right")
         self.gcli_quota_note = ctk.CTkLabel(
             quota_card,
             text=self._ui(
                 "平台配额为 Google / gcli2api 快照，可能滞后；若与真实调用冲突，以实测 429 为准。",
                 "Google / gcli2api quota is a snapshot and may lag; a real 429 takes precedence."),
-            anchor="w", justify="left", wraplength=850, text_color=TEXT_SECONDARY,
-            font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+            anchor="w", justify="left", wraplength=760, text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14))
         self.gcli_quota_note.pack(fill="x", padx=PAD_MD, pady=(0, PAD_SM))
         self.gcli_quota_list = ctk.CTkScrollableFrame(
             quota_card, height=170, fg_color=BG_SURFACE, corner_radius=7)
@@ -674,7 +692,7 @@ class MainWindow:
         self._render_gcli_quotas(None)
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.grid(row=6, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
+        actions.grid(row=5, column=0, columnspan=4, sticky="ew", padx=PAD_LG,
                      pady=(0, PAD_LG))
         for column in range(4):
             actions.grid_columnconfigure(column, weight=1, uniform="gcli-actions")
@@ -682,18 +700,18 @@ class MainWindow:
         self.gcli_buttons = {}
         button_specs = [
             ("gcli_detect", self._detect_gcli2api, BG_ELEVATED, BORDER),
-            ("gcli_install", self._install_gcli2api, GEMINI_ACCENT, GEMINI_HOVER),
-            ("gcli_start", self._start_gcli2api, SUCCESS, SUCCESS_DARK),
-            ("gcli_panel", self._open_gcli2api_panel, INFO, INFO_DARK),
+            ("gcli_install", self._install_gcli2api, BG_ELEVATED, BORDER),
+            ("gcli_start", self._start_gcli2api, ACCENT, ACCENT_HOVER),
+            ("gcli_panel", self._open_gcli2api_panel, BG_ELEVATED, BORDER),
             ("gcli_import_credentials", self._import_gcli_credentials, BG_ELEVATED, BORDER),
             ("gcli_refresh_quota", self._refresh_gcli_quotas, BG_ELEVATED, BORDER),
-            ("gcli_add_claude", self._add_gcli2api_to_claude, GEMINI_ACCENT, GEMINI_HOVER),
+            ("gcli_add_claude", self._add_gcli2api_to_claude, BG_ELEVATED, BORDER),
             ("gcli_add_gateway", self._add_gcli2api_to_gateway, BG_ELEVATED, BORDER),
             ("gcli_examples", self._show_gcli2api_examples, BG_ELEVATED, BORDER),
         ]
         for index, (key, command, color, hover) in enumerate(button_specs):
             button = self._bind_text(ctk.CTkButton(
-                actions, text="", height=34, fg_color=color, hover_color=hover,
+                actions, text="", height=38, fg_color=color, hover_color=hover,
                 text_color=TEXT_PRIMARY if color == BG_ELEVATED else ACCENT_TEXT,
                 text_color_disabled=TEXT_MUTED,
                 command=command), key)
@@ -703,7 +721,7 @@ class MainWindow:
             self.gcli_action_buttons.append(button)
             self.gcli_buttons[key] = button
         github_button = ctk.CTkButton(
-            actions, text="GitHub", width=64, height=34, fg_color="transparent",
+            actions, text="GitHub", width=64, height=38, fg_color="transparent",
             border_width=1, border_color=BORDER, hover_color=BG_ELEVATED,
             text_color=TEXT_PRIMARY,
             command=lambda: webbrowser.open("https://github.com/su-kaka/gcli2api")
@@ -819,7 +837,7 @@ class MainWindow:
                 text=self._ui("启动并检测 Antigravity 服务后，可在这里查看每个模型的额度。",
                               "Start and check Antigravity to view per-model quota here."),
                 anchor="w", justify="left", text_color=TEXT_MUTED,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(
                     fill="x", padx=PAD_SM, pady=PAD_SM)
             return
         if not snapshot.ok:
@@ -827,7 +845,7 @@ class MainWindow:
             ctk.CTkLabel(
                 self.gcli_quota_list, text=snapshot.message, anchor="w",
                 text_color=DANGER,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(
                     fill="x", padx=PAD_SM, pady=PAD_SM)
             return
         by_model = {}
@@ -864,28 +882,28 @@ class MainWindow:
                 f"{item.credential_count} 个凭证", f"{item.credential_count} credentials")
             ctk.CTkLabel(
                 row, text=model, anchor="w", text_color=TEXT_PRIMARY,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=13, weight="bold")).grid(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold")).grid(
                     row=0, column=0, sticky="ew", padx=(PAD_SM, PAD_XS))
             ctk.CTkLabel(
                 row, text=f"{percent:.0f}% · {state}", text_color=color,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold")).grid(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold")).grid(
                     row=0, column=1, sticky="e", padx=PAD_XS)
             reset = item.reset_time if item.reset_time and item.reset_time != "N/A" else self._ui("未提供重置时间", "No reset time")
             ctk.CTkLabel(
                 row, text=f"{credential_text} · {self._ui('重置', 'Reset')} {reset}",
                 anchor="e", text_color=TEXT_MUTED,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).grid(
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14)).grid(
                     row=0, column=2, sticky="e", padx=PAD_XS)
             is_current = model == current_model
             ctk.CTkButton(
                 row,
                 text=self._ui("当前使用", "In use") if is_current
                 else self._ui("切换使用", "Use model"),
-                width=88, height=30, corner_radius=8,
+                width=88, height=36, corner_radius=8,
                 fg_color=BG_INPUT if is_current else GEMINI_ACCENT,
                 hover_color=BORDER if is_current else GEMINI_HOVER,
                 text_color=TEXT_MUTED if is_current else "#FFFFFF",
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
                 state="disabled" if is_current else "normal",
                 command=lambda selected=model: self._switch_gcli_model(selected),
             ).grid(row=0, column=3, sticky="e", padx=(PAD_XS, PAD_SM))
@@ -1383,7 +1401,7 @@ class MainWindow:
         head = ctk.CTkFrame(section, fg_color="transparent")
         head.pack(fill="x", pady=(0, PAD_SM))
         self.providers_title = self._bind_text(ctk.CTkLabel(
-            head, text="", font=ctk.CTkFont(size=14, weight="bold"),
+            head, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
             text_color=TEXT_PRIMARY), "api_providers")
         self.providers_title.pack(side="left")
         self.add_btn = self._bind_text(ctk.CTkButton(
@@ -1425,46 +1443,46 @@ class MainWindow:
                      text_color=TEXT_PRIMARY if enabled else TEXT_MUTED).pack(side="left")
         if name == current:
             ctk.CTkLabel(top, text=t("selected_badge", self.lang), text_color=ACCENT,
-                         font=ctk.CTkFont(size=12, weight="bold")).pack(side="left", padx=PAD_SM)
+                         font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold")).pack(side="left", padx=PAD_SM)
         if not enabled:
             ctk.CTkLabel(top, text=t("status_disabled", self.lang), text_color=TEXT_MUTED).pack(side="right")
         elif not configured:
             ctk.CTkLabel(
                 top, text=self._ui("未配置", "Not configured"),
                 text_color=TEXT_MUTED,
-                font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(side="right")
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(side="right")
 
         meta = ctk.CTkFrame(card, fg_color="transparent")
         meta.pack(fill="x", padx=PAD_LG)
         ctk.CTkLabel(meta, text=provider.get("base_url") or "—", anchor="w",
-                     text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=11)).pack(fill="x")
+                     text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(fill="x")
         ctk.CTkLabel(meta, text=f"{provider.get('model') or '—'}   ·   {provider.get('masked_key')}",
                      anchor="w", text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(fill="x")
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(fill="x")
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_MD))
         use_btn = ctk.CTkButton(
-            actions, text=t("test_and_use", self.lang), width=105, height=30,
+            actions, text=t("test_and_use", self.lang), width=105, height=36,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             state="normal" if enabled and configured else "disabled",
             command=lambda n=name: self._use_provider(n))
         use_btn.pack(side="left", padx=(0, PAD_XS))
         test_btn = ctk.CTkButton(
-            actions, text=t("test", self.lang), width=60, height=30,
-            fg_color=INFO, hover_color=INFO_DARK,
+            actions, text=t("test", self.lang), width=60, height=36,
+            fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
             state="normal" if enabled and configured else "disabled",
             command=lambda n=name: self._begin_test(n, "test"))
         test_btn.pack(side="left", padx=PAD_XS)
         status_text, status_color = self._provider_status(name, provider)
         status = ctk.CTkLabel(actions, text=status_text, text_color=status_color,
                               anchor="w",
-                              font=ctk.CTkFont(family=FONT_FAMILY, size=12))
+                              font=ctk.CTkFont(family=FONT_FAMILY, size=14))
         status.pack(side="left", padx=PAD_SM, fill="x", expand=True)
-        ctk.CTkButton(actions, text=t("edit", self.lang), width=58, height=30,
+        ctk.CTkButton(actions, text=t("edit", self.lang), width=58, height=36,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
                       command=lambda n=name: self._show_edit_provider_dialog(n)).pack(side="right", padx=PAD_XS)
-        ctk.CTkButton(actions, text=t("delete", self.lang), width=58, height=30,
+        ctk.CTkButton(actions, text=t("delete", self.lang), width=58, height=36,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
                       border_width=1, border_color=("#d13438", "#5f2635"),
                       command=lambda n=name: self._delete_provider(n)).pack(side="right", padx=PAD_XS)
@@ -1498,14 +1516,14 @@ class MainWindow:
         head = ctk.CTkFrame(frame, fg_color="transparent")
         head.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_XS))
         self.log_title = self._bind_text(ctk.CTkLabel(
-            head, text="", text_color=TEXT_SECONDARY, font=ctk.CTkFont(size=12)), "run_log")
+            head, text="", text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "run_log")
         self.log_title.pack(side="left")
         self.clear_btn = self._bind_text(ctk.CTkButton(
-            head, text="", width=50, height=24, fg_color="transparent",
+            head, text="", width=50, height=36, fg_color="transparent",
             hover_color=BORDER, command=self._clear_log), "clear")
         self.clear_btn.pack(side="right")
         self.log_text = ctk.CTkTextbox(frame, height=78, fg_color=BG_INPUT,
-                                       font=ctk.CTkFont(family=FONT_MONO, size=11), state="disabled")
+                                       font=ctk.CTkFont(family=FONT_FAMILY, size=14), state="disabled")
         self.log_text.pack(fill="x", padx=PAD_LG, pady=(0, PAD_MD))
 
     def _on_language_change(self, display_name):
@@ -1950,13 +1968,13 @@ class MainWindow:
             text_color=TEXT_PRIMARY), "gateway_providers_tab")
         self.gateway_providers_title.pack(anchor="w")
         self.gateway_providers_hint = self._bind_text(ctk.CTkLabel(
-            title_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+            title_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=TEXT_MUTED, anchor="w", justify="left"),
             "gateway_providers_hint")
         self.gateway_providers_hint.pack(anchor="w", pady=(PAD_XS, 0))
 
         # 添加供应商按钮
-        ctk.CTkButton(header, text=t("add_provider_title", self.lang), width=130, height=34,
+        ctk.CTkButton(header, text=t("add_provider_title", self.lang), width=130, height=38,
                       fg_color=ACCENT, hover_color=ACCENT_HOVER,
                       command=self._show_add_gateway_provider_dialog).pack(side="right")
 
@@ -1987,30 +2005,30 @@ class MainWindow:
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.pack(fill="x", padx=PAD_LG, pady=(PAD_MD, PAD_XS))
 
-        ctk.CTkLabel(top, text=provider.get("name", ""), font=ctk.CTkFont(size=14, weight="bold"),
+        ctk.CTkLabel(top, text=provider.get("name", ""), font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
                      text_color=TEXT_PRIMARY).pack(side="left")
 
         ptype = provider.get("provider_type", "custom")
         type_text = SUPPORTED_PROVIDERS.get(ptype, {}).get("name", t("custom_provider", self.lang))
         ctk.CTkLabel(top, text=type_text, text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(
                          side="left", padx=PAD_SM)
 
         # 操作按钮
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=PAD_LG, pady=(PAD_SM, PAD_MD))
 
-        ctk.CTkButton(actions, text=t("test_key", self.lang), width=70, height=28,
+        ctk.CTkButton(actions, text=t("test_key", self.lang), width=70, height=36,
                       fg_color=INFO, hover_color=INFO_DARK,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=14),
                       command=lambda pid=provider.get("id", ""): self._test_provider_key(pid)).pack(side="left", padx=PAD_XS)
-        ctk.CTkButton(actions, text=t("edit", self.lang), width=50, height=28,
+        ctk.CTkButton(actions, text=t("edit", self.lang), width=50, height=36,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=14),
                       command=lambda p=provider: self._show_edit_gateway_provider_dialog(p)).pack(side="right", padx=PAD_XS)
-        ctk.CTkButton(actions, text=t("delete", self.lang), width=50, height=28,
+        ctk.CTkButton(actions, text=t("delete", self.lang), width=50, height=36,
                       fg_color="transparent", hover_color=("#fde7e9", "#3f1d27"), text_color=DANGER,
-                      font=ctk.CTkFont(family=FONT_FAMILY, size=12),
+                      font=ctk.CTkFont(family=FONT_FAMILY, size=14),
                       command=lambda p=provider: self._delete_gateway_provider(p)).pack(side="right")
 
         # 模型列表
@@ -2018,7 +2036,7 @@ class MainWindow:
         models_text = ", ".join([m.get("model_name", "") for m in models[:5]]) if models else "—"
         ctk.CTkLabel(card, text=f"{t('model', self.lang)}: {models_text}",
                      text_color=TEXT_MUTED,
-                     font=ctk.CTkFont(family=FONT_FAMILY, size=12)).pack(
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack(
                          anchor="w", padx=PAD_LG, pady=(0, PAD_SM))
 
     def _show_add_gateway_provider_dialog(self):
@@ -2073,7 +2091,7 @@ class MainWindow:
             heading,
             text=self._ui("管理界面主题，并自动检测、安装和修复 Claude Code。",
                           "Manage the theme and detect, install or repair Claude Code."),
-            font=ctk.CTkFont(size=12), text_color=TEXT_MUTED).pack(anchor="w", pady=(PAD_XS, 0))
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14), text_color=TEXT_MUTED).pack(anchor="w", pady=(PAD_XS, 0))
 
         appearance = ctk.CTkFrame(frame, fg_color=BG_SURFACE, corner_radius=12,
                                   border_width=1, border_color=BORDER)
@@ -2081,12 +2099,12 @@ class MainWindow:
         appearance.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             appearance, text=self._ui("外观", "Appearance"),
-            font=ctk.CTkFont(size=15, weight="bold"), text_color=TEXT_PRIMARY
+            font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=TEXT_PRIMARY
         ).grid(row=0, column=0, sticky="w", padx=PAD_LG, pady=(PAD_LG, PAD_XS))
         ctk.CTkLabel(
             appearance, text=self._ui("跟随系统会自动匹配 Windows 的浅色或深色模式。",
                                       "System mode follows the Windows light or dark setting."),
-            text_color=TEXT_MUTED, font=ctk.CTkFont(size=12)
+            text_color=TEXT_MUTED, font=ctk.CTkFont(family=FONT_FAMILY, size=14)
         ).grid(row=1, column=0, sticky="w", padx=PAD_LG, pady=(0, PAD_LG))
         theme_names = {
             "system": self._ui("跟随系统", "System"),
@@ -2095,9 +2113,10 @@ class MainWindow:
         }
         self._theme_display_to_mode = {label: mode for mode, label in theme_names.items()}
         self.theme_selector = ctk.CTkSegmentedButton(
-            appearance, values=list(theme_names.values()), height=34,
-            command=self._on_theme_change, selected_color=ACCENT,
-            selected_hover_color=ACCENT_HOVER, unselected_color=BG_ELEVATED,
+            appearance, values=list(theme_names.values()), height=38,
+            command=self._on_theme_change, selected_color=("#C9DCFF", "#365581"),
+            selected_hover_color=("#B7D0FA", "#436796"), unselected_color=BG_ELEVATED,
+            text_color=TEXT_PRIMARY, fg_color=BORDER,
             unselected_hover_color=BORDER)
         self.theme_selector.grid(row=0, column=1, rowspan=2, sticky="e",
                                  padx=PAD_LG, pady=PAD_LG)
@@ -2109,13 +2128,13 @@ class MainWindow:
         env.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             env, text="Claude Code",
-            font=ctk.CTkFont(size=15, weight="bold"), text_color=TEXT_PRIMARY
+            font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=TEXT_PRIMARY
         ).grid(row=0, column=0, sticky="w", padx=PAD_LG, pady=(PAD_LG, PAD_XS))
         ctk.CTkLabel(
             env,
             text=self._ui("优先使用 WinGet，失败后自动尝试 Anthropic 官方 Windows 安装器。不会改动你的 API Key。",
                           "Uses WinGet first, then Anthropic's official Windows installer. API keys are never changed."),
-            text_color=TEXT_MUTED, font=ctk.CTkFont(size=12), anchor="w",
+            text_color=TEXT_MUTED, font=ctk.CTkFont(family=FONT_FAMILY, size=14), anchor="w",
             justify="left", wraplength=700
         ).grid(row=1, column=0, columnspan=2, sticky="ew", padx=PAD_LG, pady=(0, PAD_MD))
 
@@ -2124,12 +2143,12 @@ class MainWindow:
         status_box.grid_columnconfigure(0, weight=1)
         self.environment_status_label = ctk.CTkLabel(
             status_box, text=self._ui("正在检测环境…", "Detecting environment…"),
-            font=ctk.CTkFont(size=13, weight="bold"), text_color=TEXT_SECONDARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"), text_color=TEXT_SECONDARY,
             anchor="w")
         self.environment_status_label.grid(row=0, column=0, sticky="ew", padx=PAD_MD,
                                            pady=(PAD_MD, PAD_XS))
         self.environment_detail_label = ctk.CTkLabel(
-            status_box, text="", font=ctk.CTkFont(family=FONT_MONO, size=11),
+            status_box, text="", font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             text_color=TEXT_MUTED, anchor="w", justify="left", wraplength=820)
         self.environment_detail_label.grid(row=1, column=0, sticky="ew", padx=PAD_MD,
                                            pady=(0, PAD_MD))
@@ -2152,7 +2171,7 @@ class MainWindow:
         ]
         for action, label, color, hover, text_color in specs:
             button = ctk.CTkButton(
-                actions, text=label, height=34, fg_color=color, hover_color=hover,
+                actions, text=label, height=38, fg_color=color, hover_color=hover,
                 text_color=text_color,
                 command=lambda value=action: self._run_environment_action(value))
             button.pack(side="left", padx=(0, PAD_SM))
@@ -2160,7 +2179,7 @@ class MainWindow:
 
         self.environment_output = ctk.CTkTextbox(
             env, height=135, fg_color=BG_INPUT, border_width=1, border_color=BORDER,
-            text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_MONO, size=11),
+            text_color=TEXT_SECONDARY, font=ctk.CTkFont(family=FONT_FAMILY, size=14),
             state="disabled")
         self.environment_output.grid(row=5, column=0, columnspan=2, sticky="ew",
                                      padx=PAD_LG, pady=(0, PAD_LG))
@@ -2173,17 +2192,17 @@ class MainWindow:
         version_card.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(
             version_card, text=self._ui(f"版本  {APP_VERSION_NAME}", f"Version  {APP_VERSION_NAME}"),
-            font=ctk.CTkFont(size=15, weight="bold"), text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(family=FONT_FAMILY, size=15, weight="bold"), text_color=TEXT_PRIMARY,
         ).grid(row=0, column=0, sticky="w", padx=PAD_LG, pady=(PAD_LG, PAD_XS))
         self.update_status_label = ctk.CTkLabel(
             version_card, text=self._ui("可手动检查 GitHub Release", "Check GitHub Releases manually"),
-            font=ctk.CTkFont(size=12), text_color=TEXT_MUTED, anchor="w",
+            font=ctk.CTkFont(family=FONT_FAMILY, size=14), text_color=TEXT_MUTED, anchor="w",
         )
         self.update_status_label.grid(row=1, column=0, sticky="ew", padx=PAD_LG,
                                       pady=(0, PAD_LG))
         self.update_button = ctk.CTkButton(
             version_card, text=self._ui("检查更新", "Check for Updates"), width=104,
-            height=34, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            height=38, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             command=self._check_for_updates,
         )
         self.update_button.grid(row=0, column=1, rowspan=2, padx=PAD_LG, pady=PAD_LG)
@@ -2363,13 +2382,13 @@ class MainWindow:
         header.pack(fill="x", pady=(0, PAD_LG))
 
         ctk.CTkLabel(header, text=t("logs_tab", self.lang),
-                     font=ctk.CTkFont(size=18, weight="bold"),
+                     font=ctk.CTkFont(family=FONT_FAMILY, size=18, weight="bold"),
                      text_color=TEXT_PRIMARY).pack(side="left")
 
-        ctk.CTkButton(header, text=t("refresh_logs", self.lang), width=70, height=30,
+        ctk.CTkButton(header, text=t("refresh_logs", self.lang), width=70, height=36,
                       fg_color=BG_ELEVATED, hover_color=BORDER, text_color=TEXT_PRIMARY,
                       command=self._refresh_logs_tab).pack(side="right", padx=PAD_XS)
-        ctk.CTkButton(header, text=t("clear_logs", self.lang), width=70, height=30,
+        ctk.CTkButton(header, text=t("clear_logs", self.lang), width=70, height=36,
                       fg_color="transparent", hover_color=BORDER, text_color=DANGER,
                       command=self._clear_all_logs).pack(side="right")
 
@@ -2380,7 +2399,7 @@ class MainWindow:
 
         # 日志文本区域
         self.logs_text = ctk.CTkTextbox(frame, height=400, fg_color=BG_INPUT,
-                                         font=ctk.CTkFont(family=FONT_MONO, size=11), state="disabled")
+                                         font=ctk.CTkFont(family=FONT_FAMILY, size=14), state="disabled")
         self.logs_text.pack(fill="both", expand=True)
 
     def _refresh_logs_tab(self):
@@ -2400,9 +2419,9 @@ class MainWindow:
             col = ctk.CTkFrame(self.logs_summary_frame, fg_color="transparent")
             col.pack(side="left", expand=True, padx=PAD_MD, pady=PAD_MD)
             ctk.CTkLabel(col, text=label, text_color=TEXT_MUTED,
-                         font=ctk.CTkFont(size=12)).pack()
+                         font=ctk.CTkFont(family=FONT_FAMILY, size=14)).pack()
             ctk.CTkLabel(col, text=value, text_color=TEXT_PRIMARY,
-                         font=ctk.CTkFont(size=16, weight="bold")).pack()
+                         font=ctk.CTkFont(family=FONT_FAMILY, size=16, weight="bold")).pack()
 
         # 更新日志内容
         self.logs_text.configure(state="normal")
@@ -2479,16 +2498,16 @@ class GcliExamplesDialog:
             header.pack(fill="x", padx=PAD_MD, pady=(PAD_MD, PAD_XS))
             ctk.CTkLabel(
                 header, text=names[key], text_color=TEXT_PRIMARY,
-                font=ctk.CTkFont(size=12, weight="bold"),
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14, weight="bold"),
             ).pack(side="left")
             button = ctk.CTkButton(
-                header, text=self._ui("复制", "Copy"), width=72, height=28,
+                header, text=self._ui("复制", "Copy"), width=72, height=36,
                 fg_color=GEMINI_ACCENT, hover_color=GEMINI_HOVER)
             button.configure(command=lambda text=value, control=button: self._copy(text, control))
             button.pack(side="right")
             textbox = ctk.CTkTextbox(
                 card, height=110, fg_color=BG_INPUT,
-                font=ctk.CTkFont(family=FONT_MONO, size=11), wrap="word")
+                font=ctk.CTkFont(family=FONT_FAMILY, size=14), wrap="word")
             textbox.pack(fill="x", padx=PAD_MD, pady=(0, PAD_MD))
             textbox.insert("1.0", value)
             textbox.configure(state="disabled")
@@ -2557,8 +2576,8 @@ class ProviderDialog:
                       progress_color=ACCENT).pack(anchor="w", pady=PAD_LG)
         self.error_label = ctk.CTkLabel(body, text="", text_color=DANGER, wraplength=480)
         self.error_label.pack(fill="x", pady=PAD_SM)
-        buttons = ctk.CTkFrame(body, fg_color="transparent")
-        buttons.pack(fill="x", pady=PAD_MD)
+        buttons = ctk.CTkFrame(self.dialog, fg_color=BG_SURFACE)
+        buttons.pack(fill="x", padx=PAD_XL, pady=(0, PAD_LG))
         ctk.CTkButton(buttons, text=t("cancel", self.lang), fg_color=BG_ELEVATED,
                       hover_color=BORDER, text_color=TEXT_PRIMARY,
                       command=self.dialog.destroy).pack(side="left", expand=True, fill="x", padx=(0, PAD_SM))
@@ -2656,7 +2675,7 @@ class ProviderGatewayDialog:
 
         # 提示
         self.note_label = ctk.CTkLabel(body, text=t("api_key_encrypted", self.lang),
-                                        text_color=INFO, font=ctk.CTkFont(size=12))
+                                        text_color=INFO, font=ctk.CTkFont(family=FONT_FAMILY, size=14))
         self.note_label.pack(anchor="w", pady=PAD_SM)
 
         # 错误标签

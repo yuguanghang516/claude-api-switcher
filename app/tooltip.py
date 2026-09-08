@@ -145,7 +145,7 @@ class TooltipButton:
         label = ctk.CTkLabel(
             frame,
             text=self.text,
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(family="Microsoft YaHei UI", size=14),
             text_color=TEXT_SECONDARY,
             justify="left",
             anchor="w",

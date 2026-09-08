@@ -93,17 +93,17 @@ class Palette:
 
 # Windows 11 inspired light palette.
 LIGHT = Palette(
-    bg_primary="#f3f3f3",
+    bg_primary="#EEF2F7",
     bg_surface="#ffffff",
-    bg_elevated="#f5f5f5",
+    bg_elevated="#F3F6FA",
     bg_input="#ffffff",
-    text_primary="#1a1a1a",
-    text_secondary="#616161",
-    text_muted="#767676",
-    border="#e0e0e0",
-    border_strong="#c4c4c4",
-    accent="#0f6cbd",
-    accent_hover="#115ea3",
+    text_primary="#18283F",
+    text_secondary="#52657C",
+    text_muted="#617189",
+    border="#DDE4EE",
+    border_strong="#B7C5D7",
+    accent="#2563EB",
+    accent_hover="#1D4ED8",
     accent_text="#ffffff",
     ai="#7c3aed",
     ai_hover="#6d28d9",
@@ -115,26 +115,26 @@ LIGHT = Palette(
     info="#0078d4",
     info_dark="#005a9e",
     warning="#f7630c",
-    hover="#e5e5e5",
-    subtle="#efefef",
+    hover="#E4EBF5",
+    subtle="#E8EEF7",
 )
 
 # Windows 11 inspired dark palette.
 DARK = Palette(
-    bg_primary="#1e1e1e",
-    bg_surface="#252526",
-    bg_elevated="#2d2d2d",
-    bg_input="#333333",
+    bg_primary="#111923",
+    bg_surface="#192431",
+    bg_elevated="#223040",
+    bg_input="#131E2A",
     text_primary="#f1f5f9",
     text_secondary="#94a3b8",
     # Keep muted copy visually subordinate while still meeting WCAG AA against
-    # the darkest input surface used by the app (#333333).
+    # the darkest input surface used by the app (#131E2A).
     text_muted="#8d9db2",
-    border="#3c3c3c",
-    border_strong="#5a5a5a",
-    accent="#4cc2ff",
-    accent_hover="#2f8fff",
-    accent_text="#000000",
+    border="#304155",
+    border_strong="#50667F",
+    accent="#7CA9FF",
+    accent_hover="#96BAFF",
+    accent_text="#101C30",
     ai="#9b6dff",
     ai_hover="#7c3aed",
     ai_text="#ffffff",
@@ -145,11 +145,37 @@ DARK = Palette(
     info="#79c0ff",
     info_dark="#58a6ff",
     warning="#d29922",
-    hover="#3a3a3d",
-    subtle="#2a2a2e",
+    hover="#2C3D51",
+    subtle="#202E3F",
 )
 
 _PALETTES = {"light": LIGHT, "dark": DARK}
+
+
+def apply_widget_defaults():
+    """Set native widget defaults before constructing any desktop panels."""
+    tokens = ctk.ThemeManager.theme
+    tokens["CTkFont"].update(family=FONT_FAMILY, size=14)
+    for spec in tokens.values():
+        if isinstance(spec, dict) and "text_color" in spec:
+            spec["text_color"] = [LIGHT.text_primary, DARK.text_primary]
+        if isinstance(spec, dict) and "text_color_disabled" in spec:
+            spec["text_color_disabled"] = [LIGHT.text_muted, DARK.text_muted]
+    for kind in ("CTkEntry", "CTkComboBox", "CTkOptionMenu", "CTkTextbox"):
+        if kind in tokens:
+            tokens[kind]["corner_radius"] = 8
+    tokens["CTkButton"].update(corner_radius=8,
+        fg_color=[LIGHT.accent, DARK.accent],
+        hover_color=[LIGHT.accent_hover, DARK.accent_hover],
+        text_color=[LIGHT.accent_text, DARK.accent_text])
+    for kind in ("CTkEntry", "CTkComboBox"):
+        tokens[kind]["border_color"] = [LIGHT.border, DARK.border]
+        tokens[kind]["fg_color"] = [LIGHT.bg_input, DARK.bg_input]
+        tokens[kind]["text_color"] = [LIGHT.text_primary, DARK.text_primary]
+    for kind in ("CTkOptionMenu", "CTkComboBox"):
+        tokens[kind]["button_color"] = [LIGHT.bg_elevated, DARK.bg_elevated]
+        tokens[kind]["button_hover_color"] = [LIGHT.hover, DARK.hover]
+    tokens["CTkOptionMenu"]["fg_color"] = [LIGHT.bg_elevated, DARK.bg_elevated]
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +334,7 @@ def help_text(parent, text: str = "", palette: Optional[Palette] = None,
     p = palette or theme.palette
     kwargs.setdefault("text", text)
     kwargs.setdefault("text_color", p.text_muted)
-    kwargs.setdefault("font", _font(10))
+    kwargs.setdefault("font", _font(12))
     return ctk.CTkLabel(parent, **kwargs)
 
 

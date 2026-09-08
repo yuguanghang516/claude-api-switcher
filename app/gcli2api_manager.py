@@ -381,7 +381,7 @@ class Gcli2ApiManager:
                     names.append(name)
         return tuple(names)
 
-    FEATURE_MODEL_PREFIXES = ("假流式/", "流式抗截断/")
+    FEATURE_MODEL_PREFIXES = ("假流式/", "流式抗截断/", "抗截断/")
 
     @classmethod
     def normalize_model_name(cls, model: str) -> str:
@@ -429,7 +429,14 @@ class Gcli2ApiManager:
         else:
             family, tier = 3, 9
         thinking_penalty = 0 if "thinking" in name else 1
-        return family, tier, thinking_penalty, name
+        # Dynamic upstream model IDs must remain intact. Within a Gemini tier,
+        # prefer newer numeric generations (3.10 > 3.8 > 2.5), not lexical order.
+        generation = (0, 0)
+        if family == 2:
+            match = re.search(r"gemini-(\d+)(?:\.(\d+))?", name)
+            if match:
+                generation = (-int(match[1]), -int(match[2] or 0))
+        return family, tier, generation, thinking_penalty, name
 
     @classmethod
     def clean_claude_models(cls, models: Sequence[str]) -> Tuple[str, ...]:
