@@ -4,11 +4,11 @@ import hashlib
 import json
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
-from urllib.parse import urlparse
 
 from .api_tester import ApiTester
 from .config_manager import ConfigManager
 from .credential_manager import CredentialManager
+from .api_urls import anthropic_base_url
 
 
 EXPORT_FIELDS = (
@@ -46,19 +46,18 @@ class ProviderManager:
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _validate_fields(name: str, base_url: str, model: str, priority: int) -> Tuple[bool, str]:
+    def _validate_fields(name: str, base_url: str, model: str, priority: int,
+                         allow_incomplete: bool = False) -> Tuple[bool, str]:
         if not name.strip():
             return False, "Provider 名称不能为空"
         if any(ord(ch) < 32 for ch in name + model + base_url):
             return False, "输入中不能包含控制字符"
-        if not base_url.strip():
-            return False, "API Base URL 不能为空"
-        parsed = urlparse(base_url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username:
-            return False, "API 地址格式无效，请填写完整的 http/https 地址"
-        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return False, "远程 API 地址必须使用 HTTPS"
-        if not model.strip():
+        if base_url.strip() or not allow_incomplete:
+            try:
+                anthropic_base_url(base_url)
+            except ValueError as exc:
+                return False, str(exc)
+        if not model.strip() and not allow_incomplete:
             return False, "模型名称不能为空"
         if (not isinstance(priority, int) or isinstance(priority, bool)
                 or not 1 <= priority <= 999):
@@ -96,7 +95,7 @@ class ProviderManager:
         if not ok:
             return False, f"{message} / Invalid provider settings"
         name = name.strip()
-        base_url = base_url.strip().rstrip("/")
+        base_url = anthropic_base_url(base_url)
         model = model.strip()
         small_fast_model = small_fast_model.strip() if small_fast_model else model
         auth_mode = auth_mode if auth_mode in {"bearer", "x-api-key"} else "bearer"
@@ -227,28 +226,38 @@ class ProviderManager:
         try:
             with open(filepath, "r", encoding="utf-8") as file:
                 raw = json.load(file)
+            if not isinstance(raw, dict):
+                return False, "配置文件必须是 JSON 对象"
             providers = raw.get("providers")
-            if not isinstance(providers, list) or not 1 <= len(providers) <= 100:
+            if not isinstance(providers, list) or not 0 <= len(providers) <= 100:
                 return False, "配置文件中的 Provider 列表无效"
             clean = []
             names = set()
             for item in providers:
                 if not isinstance(item, dict):
                     return False, "Provider 数据格式无效"
+                if any(field in item and not isinstance(item[field], str)
+                       for field in ("name", "base_url", "model")):
+                    return False, "Provider 名称、API 地址和模型必须是文本"
+                enabled = item.get("enabled", True)
+                if not isinstance(enabled, bool):
+                    return False, "Provider 启用状态必须是 true 或 false"
                 name = str(item.get("name", "")).strip()
                 priority = item["priority"] if "priority" in item else 99
                 ok, message = self._validate_fields(
-                    name, str(item.get("base_url", "")), str(item.get("model", "")), priority)
+                    name, str(item.get("base_url", "")), str(item.get("model", "")),
+                    priority, allow_incomplete=not enabled)
                 if not ok or name in names:
                     return False, f"导入失败：{message or 'Provider 名称重复'}"
                 names.add(name)
                 clean.append({
                     "id": uuid.uuid4().hex,
                     "name": name,
-                    "base_url": str(item.get("base_url", "")).strip().rstrip("/"),
+                    "base_url": (anthropic_base_url(item["base_url"])
+                                 if item.get("base_url", "").strip() else ""),
                     "model": str(item.get("model", "")).strip(),
                     "small_fast_model": str(item.get("small_fast_model") or item.get("model", "")).strip(),
-                    "enabled": bool(item.get("enabled", True)),
+                    "enabled": enabled,
                     "priority": priority,
                     "is_fallback": False,
                     "auth_mode": item.get("auth_mode") if item.get("auth_mode") in {"bearer", "x-api-key"} else "bearer",

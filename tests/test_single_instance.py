@@ -4,6 +4,14 @@ import uuid
 import pytest
 
 from app.single_instance import SingleInstanceGuard
+from app.single_instance import MUTEX_NAME, isolated_instance_name
+
+
+def test_isolated_profile_mutex_does_not_collide(tmp_path):
+    first = isolated_instance_name(str(tmp_path / "one"))
+    assert first != MUTEX_NAME
+    assert first != isolated_instance_name(str(tmp_path / "two"))
+    assert first == isolated_instance_name(str(tmp_path / "one" / "."))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named mutex test")

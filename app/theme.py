@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, List, Optional
 
-import customtkinter as ctk
+from . import ui_widgets as ctk
 
 # ---------------------------------------------------------------------------
 # Typography & spacing

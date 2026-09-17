@@ -1,6 +1,7 @@
 # AI Router V3 依赖
 # 核心依赖
 customtkinter>=5.2.0
+Pillow>=10.0.0
 keyring>=24.0.0
 requests>=2.31.0
 flask>=3.0.0

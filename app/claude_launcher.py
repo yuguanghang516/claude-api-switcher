@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Tuple
 
 from .path_resolver import ClaudeCommandResolver
+from .api_urls import anthropic_base_url
 
 
 class ClaudeLauncher:
@@ -74,6 +75,10 @@ class ClaudeLauncher:
     ) -> Tuple[bool, str]:
         if not base_url:
             return False, "未设置 API Base URL"
+        try:
+            base_url = anthropic_base_url(base_url)
+        except ValueError as exc:
+            return False, str(exc)
         if not api_key:
             return False, "未设置 API Key"
         if not model:

@@ -1,10 +1,11 @@
 """安全、最小化的 Anthropic 兼容 API 连通性测试。"""
 import re
 import time
-from urllib.parse import urlparse
 from typing import Tuple
 
 import requests
+
+from .api_urls import anthropic_messages_url
 
 
 TEST_TIMEOUT = 15
@@ -86,15 +87,10 @@ class ApiTester:
         if not model:
             return False, "未设置模型名称 / Model name not set", 0
 
-        parsed = urlparse(base_url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            return False, "API 地址格式无效（需要完整的 http/https 地址）", 0
-        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
-            return False, "为保护 API Key，远程 API 地址必须使用 HTTPS", 0
-
-        endpoint = base_url.strip().rstrip("/")
-        if not endpoint.endswith("/v1/messages"):
-            endpoint = f"{endpoint}/v1/messages"
+        try:
+            endpoint = anthropic_messages_url(base_url)
+        except ValueError as exc:
+            return False, str(exc), 0
 
         common_headers = {
             "anthropic-version": "2023-06-01",
@@ -128,6 +124,18 @@ class ApiTester:
             elapsed_ms = int((time.monotonic() - started) * 1000)
             status = response.status_code
             if status == 200:
+                try:
+                    body = response.json()
+                except (ValueError, TypeError):
+                    body = None
+                if (not isinstance(body, dict) or body.get("error")
+                        or body.get("type") != "message"
+                        or body.get("role") != "assistant"
+                        or not isinstance(body.get("content"), list)):
+                    return False, (
+                        "失败 · HTTP 200 但响应不是 Anthropic 消息；"
+                        "请确认填写的是 API 地址，而非管理面板或 OpenAI 接口"
+                    ), elapsed_ms
                 return True, f"正常 · {elapsed_ms}ms", elapsed_ms
             if 300 <= status < 400:
                 return False, f"失败 · {status} 地址发生重定向（为保护 Key 已停止）", elapsed_ms

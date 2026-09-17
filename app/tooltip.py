@@ -3,9 +3,10 @@ Tooltip 小白提示组件
 文字右侧的圆形问号，鼠标悬停或点击弹出解释框
 用于给非专业用户解释各字段含义
 """
-import customtkinter as ctk
+from . import ui_widgets as ctk
 
 from .theme import DARK, LIGHT
+from .smooth_widgets import SmoothButton
 
 
 # 与其余页面共用语义色；CustomTkinter 会自动选择 light/dark 分量。
@@ -52,7 +53,7 @@ class TooltipButton:
         self._pinned = False
 
         # 只显示圆圈内问号；说明文字放在弹层中。
-        self.btn = ctk.CTkButton(
+        self.btn = SmoothButton(
             parent,
             text="?",
             width=BTN_WIDTH,
@@ -61,8 +62,8 @@ class TooltipButton:
             fg_color="transparent",
             hover_color=BG_ELEVATED,
             text_color=TEXT_SECONDARY,
-            border_width=1,
-            border_color=TEXT_MUTED,
+            border_width=1.5,
+            border_color=BORDER,
             corner_radius=16,
             command=self._on_click_toggle,
         )

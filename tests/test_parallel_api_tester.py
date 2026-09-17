@@ -11,6 +11,10 @@ class _Response:
     def __init__(self, status_code):
         self.status_code = status_code
 
+    def json(self):
+        return {"type": "message", "role": "assistant",
+                "content": [{"type": "text", "text": "OK"}]}
+
 
 def _mock_post(monkeypatch, result):
     """Replace requests.post and return a list recording every attempted call."""

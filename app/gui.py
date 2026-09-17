@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
-import customtkinter as ctk
+from . import ui_widgets as ctk
 from PIL import Image
 from tkinter import filedialog, messagebox
 
@@ -20,6 +20,7 @@ from .logger import AppLogger
 from .path_resolver import ClaudeCommandResolver, ProjectDirectoryResolver
 from .provider_manager import ProviderManager
 from .tooltip import TooltipButton
+from .smooth_widgets import SmoothFrame, SmoothComboBox
 from .db_manager import DatabaseManager
 from .gateway_server import GatewayServer, SUPPORTED_PROVIDERS
 from .model_manager import ModelManager
@@ -445,7 +446,7 @@ class MainWindow:
         right.pack(side="right")
         display_lang = next((name for name, code in LANGUAGES if code == self.lang), "中文")
         self.lang_var = ctk.StringVar(value=display_lang)
-        self.lang_combo = ctk.CTkComboBox(
+        self.lang_combo = SmoothComboBox(
             right, values=[name for name, _ in LANGUAGES], variable=self.lang_var,
             width=82, height=36, command=self._on_language_change,
             fg_color=BG_ELEVATED, border_color=BORDER, button_color=BORDER,
@@ -599,7 +600,7 @@ class MainWindow:
             font=ctk.CTkFont(family=FONT_FAMILY, size=14)), "gcli_model")
         self.gcli_model_label.grid(row=1, column=0, sticky="w", padx=(PAD_MD, PAD_SM), pady=PAD_SM)
         self.gcli_model_var = ctk.StringVar(value=saved_model or "gemini-2.5-pro")
-        self.gcli_model_combo = ctk.CTkComboBox(
+        self.gcli_model_combo = SmoothComboBox(
             credential, values=["gemini-2.5-pro"], variable=self.gcli_model_var,
             width=230, height=38, fg_color=BG_INPUT, border_color=BORDER)
         self.gcli_model_combo.grid(row=1, column=1, columnspan=2, sticky="ew", padx=(0, PAD_MD), pady=PAD_SM)
@@ -1432,8 +1433,8 @@ class MainWindow:
         configured = bool(
             provider.get("base_url") and provider.get("model")
             and provider.get("has_api_key"))
-        card = ctk.CTkFrame(self.provider_list_frame, fg_color=BG_SURFACE,
-                            corner_radius=10, border_width=1,
+        card = SmoothFrame(self.provider_list_frame, fg_color=BG_SURFACE,
+                            corner_radius=10, border_width=1.5 if name == current else 1,
                             border_color=ACCENT if name == current else BORDER)
         card.pack(fill="x", pady=PAD_XS)
         top = ctk.CTkFrame(card, fg_color="transparent")
@@ -2570,7 +2571,7 @@ class ProviderDialog:
         ctk.CTkLabel(auth_header, text=t("field_auth_mode", self.lang),
                      text_color=TEXT_SECONDARY).pack(side="left")
         TooltipButton(auth_header, text=t("tooltip_auth_mode", self.lang), lang=self.lang).pack(side="left", padx=PAD_XS)
-        ctk.CTkComboBox(body, values=["Bearer Token", "x-api-key"], variable=self.auth_var,
+        SmoothComboBox(body, values=["Bearer Token", "x-api-key"], variable=self.auth_var,
                         height=36, fg_color=BG_INPUT, border_color=BORDER).pack(fill="x")
         ctk.CTkSwitch(body, text=t("field_enabled", self.lang), variable=self.enabled_var,
                       progress_color=ACCENT).pack(anchor="w", pady=PAD_LG)
@@ -2646,7 +2647,7 @@ class ProviderGatewayDialog:
         type_names = [v["name"] for v in SUPPORTED_PROVIDERS.values()]
         type_keys = list(SUPPORTED_PROVIDERS.keys())
         self.type_map = {v["name"]: k for k, v in SUPPORTED_PROVIDERS.items()}
-        self.type_combo = ctk.CTkComboBox(body, values=type_names, variable=self.type_var,
+        self.type_combo = SmoothComboBox(body, values=type_names, variable=self.type_var,
                                            height=36, fg_color=BG_INPUT, border_color=BORDER,
                                            command=self._on_type_change)
         self.type_combo.pack(fill="x", pady=(0, PAD_SM))
@@ -2670,7 +2671,7 @@ class ProviderGatewayDialog:
                      text_color=TEXT_SECONDARY).pack(side="left")
         auth_value = "x-api-key" if provider.get("auth_mode") == "x-api-key" else "Bearer Token"
         self.auth_var = ctk.StringVar(value=auth_value)
-        ctk.CTkComboBox(body, values=["Bearer Token", "x-api-key"], variable=self.auth_var,
+        SmoothComboBox(body, values=["Bearer Token", "x-api-key"], variable=self.auth_var,
                         height=36, fg_color=BG_INPUT, border_color=BORDER).pack(fill="x")
 
         # 提示

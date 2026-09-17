@@ -17,6 +17,8 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 
 from .client_source import classify_client_source
 from .gcli_failover import GcliModelFailover
+from .api_urls import anthropic_messages_url
+from .upstream_stream import relay_sse, usage_counts
 
 
 # 支持的供应商及其默认配置
@@ -150,40 +152,39 @@ class GatewayServer:
                               int((time.monotonic() - started) * 1000), "error", "上游请求超时")
             return jsonify({"error": {"type": "timeout_error", "message": "gcli2api 请求超时"}}), 504
         except requests.exceptions.ConnectionError:
-            return jsonify({"error": {
-                "type": "connection_error", "message": "无法连接 gcli2api；请检查服务状态",
-            }}), 502
-        except RuntimeError as exc:
-            return jsonify({"error": {"type": "failover_unavailable", "message": str(exc)}}), 503
+            return self._upstream_error(requested_model, started, 502, "无法连接 gcli2api；请检查服务状态")
+        except requests.exceptions.RequestException:
+            return self._upstream_error(requested_model, started, 502)
+        except RuntimeError:
+            return self._upstream_error(requested_model, started, 503)
 
         content_type = upstream.headers.get("content-type", "application/json")
         status_code = upstream.status_code
+        if status_code != 200:
+            upstream.close()
+            return self._upstream_error(used_model, started, status_code)
         if stream and status_code == 200:
-            def generate():
-                try:
-                    for chunk in upstream.iter_content(chunk_size=8192):
-                        if chunk:
-                            yield chunk
-                finally:
-                    upstream.close()
-                    self._log_request(
-                        used_model, 0, 0, 0, int((time.monotonic() - started) * 1000),
-                        "success", "", provider="Gemini Antigravity (gcli2api)")
-            response = Response(stream_with_context(generate()), status=200, content_type=content_type)
+            if "text/event-stream" not in content_type.lower():
+                upstream.close()
+                return self._upstream_error(used_model, started, 502, "上游未返回有效的流式响应")
+            def completed(incoming, outgoing, total, status, error):
+                self._log_request(used_model, incoming, outgoing, total,
+                                  int((time.monotonic() - started) * 1000), status, error,
+                                  provider="Gemini Antigravity (gcli2api)")
+            response = Response(stream_with_context(relay_sse(upstream, "anthropic", completed)),
+                                content_type="text/event-stream", headers={"Cache-Control": "no-cache"})
             response.headers["X-Gcli-Model-Used"] = used_model
             return response
 
         body = upstream.content
         upstream.close()
-        input_tokens = output_tokens = 0
-        if status_code == 200:
-            try:
-                parsed = json.loads(body.decode("utf-8"))
-                usage = parsed.get("usage", {}) if isinstance(parsed, dict) else {}
-                input_tokens = int(usage.get("input_tokens", 0))
-                output_tokens = int(usage.get("output_tokens", 0))
-            except (UnicodeDecodeError, ValueError, TypeError):
-                pass
+        try:
+            parsed = json.loads(body.decode("utf-8"))
+            if not isinstance(parsed, dict) or parsed.get("error") or not isinstance(parsed.get("content"), list):
+                raise ValueError("Invalid message")
+        except (UnicodeDecodeError, ValueError, TypeError):
+            return self._upstream_error(used_model, started, 502, "上游返回的不是有效消息")
+        input_tokens, output_tokens, _ = usage_counts(parsed.get("usage"), "anthropic")
         self._log_request(
             used_model, input_tokens, output_tokens, input_tokens + output_tokens,
             int((time.monotonic() - started) * 1000),
@@ -289,6 +290,9 @@ class GatewayServer:
         except Exception:
             return jsonify({"error": {"message": "无效的 JSON 请求", "type": "invalid_request_error"}}), 400
 
+        if not isinstance(data, dict):
+            return jsonify({"error": {"message": "JSON 请求必须是对象", "type": "invalid_request_error"}}), 400
+
         model_name = data.get("model", "")
         messages = data.get("messages", [])
         stream = data.get("stream", False)
@@ -298,7 +302,7 @@ class GatewayServer:
         if not model_name:
             return jsonify({"error": {"message": "未指定模型", "type": "invalid_request_error"}}), 400
 
-        if not messages:
+        if not isinstance(messages, list) or not messages or any(not isinstance(m, dict) for m in messages):
             return jsonify({"error": {"message": "消息列表为空", "type": "invalid_request_error"}}), 400
 
         # 查找模型配置
@@ -377,69 +381,67 @@ class GatewayServer:
             elapsed = int((time.monotonic() - start_time) * 1000)
             self._log_request(data.get("model", ""), 0, 0, 0, elapsed, "error", "请求超时")
             return jsonify({"error": {"message": "请求超时", "type": "timeout_error"}}), 504
-        except requests.exceptions.RequestException as e:
-            elapsed = int((time.monotonic() - start_time) * 1000)
-            self._log_request(data.get("model", ""), 0, 0, 0, elapsed, "error", str(e)[:200])
-            return jsonify({"error": {"message": f"代理请求失败: {str(e)[:100]}", "type": "proxy_error"}}), 502
+        except requests.exceptions.RequestException:
+            return self._upstream_error(data.get("model", ""), start_time, 502)
 
     def _sync_openai(self, url: str, headers: Dict, payload: Dict, model: str, start_time: float):
         """同步 OpenAI 请求"""
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
-        elapsed = int((time.monotonic() - start_time) * 1000)
-
-        result = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-
-        # 提取 token 使用量
-        usage = result.get("usage", {})
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-        total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
-
-        self._log_request(model, prompt_tokens, completion_tokens, total_tokens, elapsed,
-                         "success" if resp.status_code == 200 else "error",
-                         "" if resp.status_code == 200 else f"HTTP {resp.status_code}")
-
-        response = {
-            "id": result.get("id", f"chatcmpl-{int(time.time())}"),
-            "object": "chat.completion",
-            "created": int(time.time()),
-            "model": model,
-            "choices": result.get("choices", []),
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens,
-            }
-        }
-        return jsonify(response), resp.status_code
+        resp = requests.post(url, headers=headers, json=payload, timeout=120, allow_redirects=False)
+        try:
+            if resp.status_code != 200:
+                return self._upstream_error(model, start_time, resp.status_code)
+            try:
+                result = resp.json()
+                if (not isinstance(result, dict) or result.get("error")
+                        or not isinstance(result.get("choices"), list) or not result["choices"]
+                        or any(not isinstance(c, dict) or not isinstance(c.get("message"), dict)
+                               for c in result["choices"])):
+                    raise ValueError("Invalid completion")
+            except (ValueError, TypeError):
+                return self._upstream_error(model, start_time, 502, "上游返回的不是有效聊天响应")
+            incoming, outgoing, total = usage_counts(result.get("usage"))
+            self._log_request(model, incoming, outgoing, total,
+                              int((time.monotonic() - start_time) * 1000), "success", "")
+            return jsonify(result), 200
+        finally:
+            resp.close()
 
     def _stream_openai(self, url: str, headers: Dict, payload: Dict, model: str, start_time: float):
         """流式 OpenAI 请求"""
-        def generate():
-            prompt_tokens = 0
-            completion_tokens = 0
-            try:
-                with requests.post(url, headers=headers, json=payload, timeout=120, stream=True) as resp:
-                    for line in resp.iter_lines():
-                        if line:
-                            decoded = line.decode("utf-8")
-                            if decoded.startswith("data: "):
-                                yield decoded + "\n\n"
-                                if "[DONE]" in decoded:
-                                    break
-            finally:
-                elapsed = int((time.monotonic() - start_time) * 1000)
-                self._log_request(model, prompt_tokens, completion_tokens,
-                                 prompt_tokens + completion_tokens, elapsed, "success", "")
+        payload = dict(payload, stream_options={"include_usage": True})
+        resp = requests.post(url, headers=headers, json=payload, timeout=120,
+                             stream=True, allow_redirects=False)
+        if resp.status_code != 200:
+            resp.close()
+            return self._upstream_error(model, start_time, resp.status_code)
+        if "text/event-stream" not in resp.headers.get("content-type", "").lower():
+            resp.close()
+            return self._upstream_error(model, start_time, 502, "上游未返回有效的流式响应")
 
-        return Response(stream_with_context(generate()), content_type="text/event-stream")
+        def completed(incoming, outgoing, total, status, error):
+            self._log_request(model, incoming, outgoing, total,
+                              int((time.monotonic() - start_time) * 1000), status, error)
+        return Response(stream_with_context(relay_sse(resp, "openai", completed)),
+                        content_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+    def _upstream_error(self, model, started, status, message=""):
+        status = status if 400 <= status <= 599 else 502
+        if not message:
+            reason = {400: "请求参数或模型不受上游支持", 401: "上游 API 密钥无效",
+                      403: "上游拒绝访问，请检查账户权限", 429: "上游限流或额度不足",
+                      503: "上游服务暂不可用", 504: "上游请求超时"}.get(status, "上游服务请求失败")
+            message = f"{reason}（HTTP {status}）"
+        self._log_request(model, 0, 0, 0, int((time.monotonic() - started) * 1000), "error", message)
+        return jsonify({"error": {"type": "upstream_error", "message": message}}), status
 
     def _proxy_anthropic(self, data: Dict, model_config: Dict, base_url: str,
                          headers: Dict, stream: bool, start_time: float):
         """代理 Anthropic 格式请求（转换为 OpenAI 格式）"""
-        target_url = base_url.rstrip("/")
-        if not target_url.endswith("/messages"):
-            target_url = f"{target_url}/messages"
+        try:
+            target_url = anthropic_messages_url(base_url)
+        except ValueError:
+            return self._upstream_error(data.get("model", ""), start_time, 502, "供应商地址格式不正确")
+        headers = dict(headers, **{"anthropic-version": "2023-06-01"})
 
         # 转换消息格式 OpenAI -> Anthropic
         messages = data.get("messages", [])
@@ -466,20 +468,26 @@ class GatewayServer:
             payload["temperature"] = data["temperature"]
 
         try:
-            resp = requests.post(target_url, headers=headers, json=payload, timeout=120)
+            resp = requests.post(target_url, headers=headers, json=payload, timeout=120, allow_redirects=False)
             elapsed = int((time.monotonic() - start_time) * 1000)
 
             if resp.status_code != 200:
-                error_text = resp.text[:200]
-                self._log_request(data.get("model", ""), 0, 0, 0, elapsed, "error", error_text)
-                return jsonify({"error": {"message": f"API 错误: {error_text}", "type": "api_error"}}), resp.status_code
+                resp.close()
+                return self._upstream_error(data.get("model", ""), start_time, resp.status_code)
 
-            result = resp.json()
+            try:
+                result = resp.json()
+                if (not isinstance(result, dict) or result.get("error")
+                        or not isinstance(result.get("content"), list)
+                        or any(not isinstance(b, dict) for b in result["content"])):
+                    raise ValueError("Invalid message")
+            except (ValueError, TypeError):
+                return self._upstream_error(data.get("model", ""), start_time, 502, "上游返回的不是有效消息")
+            finally:
+                resp.close()
 
             # 提取使用量
-            usage = result.get("usage", {})
-            input_tokens = usage.get("input_tokens", 0)
-            output_tokens = usage.get("output_tokens", 0)
+            input_tokens, output_tokens, _ = usage_counts(result.get("usage"), "anthropic")
 
             # 提取回复文本
             content_blocks = result.get("content", [])
@@ -517,10 +525,8 @@ class GatewayServer:
             elapsed = int((time.monotonic() - start_time) * 1000)
             self._log_request(data.get("model", ""), 0, 0, 0, elapsed, "error", "请求超时")
             return jsonify({"error": {"message": "请求超时", "type": "timeout_error"}}), 504
-        except requests.exceptions.RequestException as e:
-            elapsed = int((time.monotonic() - start_time) * 1000)
-            self._log_request(data.get("model", ""), 0, 0, 0, elapsed, "error", str(e)[:200])
-            return jsonify({"error": {"message": f"代理请求失败: {str(e)[:100]}", "type": "proxy_error"}}), 502
+        except requests.exceptions.RequestException:
+            return self._upstream_error(data.get("model", ""), start_time, 502)
 
     def _log_request(self, model: str, input_tokens: int, output_tokens: int,
                      total_tokens: int, response_time_ms: int, status: str, error: str = "",

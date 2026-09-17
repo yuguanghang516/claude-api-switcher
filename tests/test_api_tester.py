@@ -39,6 +39,10 @@ class TestApiTesterMockedRequests:
         """200 响应返回成功"""
         mock_response = MagicMock()
         mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "type": "message", "role": "assistant",
+            "content": [{"type": "text", "text": "OK"}],
+        }
         mock_post.return_value = mock_response
 
         success, msg, ms = ApiTester.test_provider(

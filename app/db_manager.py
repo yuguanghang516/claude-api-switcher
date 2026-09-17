@@ -13,6 +13,7 @@ import threading
 import time
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any, Tuple
+from .secret_storage import PREFIX, protect_secret, unprotect_secret
 
 
 class DatabaseManager:
@@ -25,6 +26,11 @@ class DatabaseManager:
         self._local = threading.local()
         self._lock = threading.Lock()
         self._init_db()
+        try:
+            self._migrate_secrets()
+        except Exception:
+            self.close()
+            raise
 
     def _get_conn(self) -> sqlite3.Connection:
         """获取当前线程的数据库连接"""
@@ -33,6 +39,7 @@ class DatabaseManager:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA secure_delete=ON")
             self._local.conn = conn
         return self._local.conn
 
@@ -130,6 +137,32 @@ class DatabaseManager:
 
     # ==================== 供应商管理 ====================
 
+    def _migrate_secrets(self):
+        conn = self._get_conn()
+        updates = []
+        for row in conn.execute("SELECT id, api_key FROM providers"):
+            secret = row["api_key"] or ""
+            if secret.startswith(PREFIX):
+                unprotect_secret(secret)  # Fail closed; never replace unreadable keys.
+            elif secret:
+                encrypted = protect_secret(secret)
+                if unprotect_secret(encrypted) != secret:
+                    raise OSError("网关密钥迁移校验失败，原配置已保留。")
+                updates.append((encrypted, row["id"]))
+        if updates:
+            with conn:
+                conn.executemany("UPDATE providers SET api_key=? WHERE id=?", updates)
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    @staticmethod
+    def _decode_row(row):
+        if row is None:
+            return None
+        result = dict(row)
+        if "api_key" in result:
+            result["api_key"] = unprotect_secret(result["api_key"])
+        return result
+
     def add_provider(self, provider: Dict[str, Any]) -> Tuple[bool, str]:
         """添加供应商"""
         try:
@@ -144,7 +177,7 @@ class DatabaseManager:
                     provider.get("name", ""),
                     provider.get("provider_type", "custom"),
                     provider.get("base_url", ""),
-                    provider.get("api_key", ""),
+                    protect_secret(provider.get("api_key", "")),
                     provider.get("auth_mode", "bearer"),
                     provider.get("status", "active"),
                     now, now
@@ -167,7 +200,7 @@ class DatabaseManager:
                 for key in ["name", "provider_type", "base_url", "api_key", "auth_mode", "status"]:
                     if key in data:
                         fields.append(f"{key}=?")
-                        values.append(data[key])
+                        values.append(protect_secret(data[key]) if key == "api_key" else data[key])
                 fields.append("updated_at=?")
                 values.append(now)
                 values.append(provider_id)
@@ -194,25 +227,25 @@ class DatabaseManager:
         """获取单个供应商"""
         conn = self._get_conn()
         row = conn.execute("SELECT * FROM providers WHERE id=?", (provider_id,)).fetchone()
-        return dict(row) if row else None
+        return self._decode_row(row)
 
     def get_provider_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """按名称获取供应商"""
         conn = self._get_conn()
         row = conn.execute("SELECT * FROM providers WHERE name=?", (name,)).fetchone()
-        return dict(row) if row else None
+        return self._decode_row(row)
 
     def get_all_providers(self) -> List[Dict[str, Any]]:
         """获取所有供应商"""
         conn = self._get_conn()
         rows = conn.execute("SELECT * FROM providers ORDER BY created_at").fetchall()
-        return [dict(r) for r in rows]
+        return [self._decode_row(r) for r in rows]
 
     def get_active_providers(self) -> List[Dict[str, Any]]:
         """获取活跃的供应商"""
         conn = self._get_conn()
         rows = conn.execute("SELECT * FROM providers WHERE status='active' ORDER BY name").fetchall()
-        return [dict(r) for r in rows]
+        return [self._decode_row(r) for r in rows]
 
     # ==================== 模型管理 ====================
 
@@ -281,9 +314,11 @@ class DatabaseManager:
         """按模型名称获取"""
         conn = self._get_conn()
         row = conn.execute(
-            "SELECT * FROM models WHERE model_name=? AND status='enabled'", (model_name,)
+            """SELECT m.*, p.base_url, p.api_key, p.auth_mode, p.provider_type
+               FROM models m JOIN providers p ON m.provider_id=p.id
+               WHERE m.model_name=? AND m.status='enabled' AND p.status='active'""", (model_name,)
         ).fetchone()
-        return dict(row) if row else None
+        return self._decode_row(row)
 
     def get_models_by_provider(self, provider_id: str) -> List[Dict[str, Any]]:
         """获取供应商的所有模型"""
@@ -302,7 +337,7 @@ class DatabaseManager:
             LEFT JOIN providers p ON m.provider_id = p.id
             ORDER BY m.provider_name, m.model_name
         """).fetchall()
-        return [dict(r) for r in rows]
+        return [self._decode_row(r) for r in rows]
 
     def get_enabled_models(self) -> List[Dict[str, Any]]:
         """获取已启用的模型"""
@@ -314,7 +349,7 @@ class DatabaseManager:
             WHERE m.status = 'enabled' AND p.status = 'active'
             ORDER BY m.provider_name, m.model_name
         """).fetchall()
-        return [dict(r) for r in rows]
+        return [self._decode_row(r) for r in rows]
 
     def toggle_model_status(self, model_id: str) -> Tuple[bool, str]:
         """切换模型启用/禁用状态"""

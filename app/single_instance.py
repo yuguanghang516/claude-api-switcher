@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import hashlib
 import os
 from ctypes import wintypes
 
@@ -10,6 +11,12 @@ MUTEX_NAME = r"Local\ClaudeAPISwitcher.yuguanghang516.SingleInstance"
 WINDOW_TITLE_PREFIX = "Claude API Switcher"
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
+
+
+def isolated_instance_name(state_dir: str) -> str:
+    """Keep an explicitly isolated QA/profile directory out of the live mutex."""
+    path = os.path.normcase(os.path.realpath(state_dir))
+    return MUTEX_NAME + "." + hashlib.sha256(path.encode("utf-8")).hexdigest()[:24]
 
 
 class SingleInstanceGuard:

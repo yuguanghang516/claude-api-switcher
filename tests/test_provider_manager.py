@@ -267,8 +267,7 @@ class TestProviderManager:
 
     def test_export_import_preserves_priority(self, manager, temp_dir):
         mgr, _ = manager
-        # 默认 DeepSeek 是未配置占位项，不属于可导入的完整 Provider。
-        assert mgr.config.delete_provider("DeepSeek") is True
+        # 未配置且禁用的默认项也必须能随备份导入。
         success, _ = mgr.add_or_update_provider(
             name="PriorityTest",
             base_url="https://priority.example.com/anthropic",

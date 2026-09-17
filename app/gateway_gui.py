@@ -8,7 +8,8 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-import customtkinter as ctk
+from . import ui_widgets as ctk
+from .smooth_widgets import SmoothComboBox
 from tkinter import messagebox
 
 from .i18n import t
@@ -513,7 +514,7 @@ class ModelDialog:
                      text_color=TEXT_SECONDARY).pack(side="left")
 
         if type == "combo":
-            widget = ctk.CTkComboBox(parent, variable=variable, values=values,
+            widget = SmoothComboBox(parent, variable=variable, values=values,
                                       height=36, fg_color=BG_INPUT, border_color=BORDER)
         else:
             widget = ctk.CTkEntry(parent, textvariable=variable, height=36,

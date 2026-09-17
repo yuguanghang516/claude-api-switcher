@@ -15,6 +15,7 @@ import copy
 import time
 import threading
 from typing import List, Dict, Any, Optional, Callable
+from .secret_storage import PREFIX, protect_secret, unprotect_secret
 
 
 # 默认 V2 配置
@@ -109,13 +110,12 @@ class V2ConfigManager:
     def _load_config(self):
         """加载配置文件"""
         if os.path.exists(self.config_file):
-            try:
-                with open(self.config_file, "r", encoding="utf-8") as f:
-                    self.config = json.load(f)
-                # 合并新增默认字段
-                self._merge_defaults()
-            except (json.JSONDecodeError, IOError):
-                self._create_default_config()
+            # A read/decryption failure must never erase the original file.
+            with open(self.config_file, "r", encoding="utf-8") as f:
+                self.config, migrate = self._decode_config(json.load(f))
+            self._merge_defaults()
+            if migrate:
+                self._save_config()
         else:
             self._create_default_config()
 
@@ -142,13 +142,18 @@ class V2ConfigManager:
     def _save_config(self):
         """原子写入配置"""
         try:
+            stored = copy.deepcopy(self.config)
+            stored["multi_keys"] = {
+                provider: [protect_secret(key) for key in keys]
+                for provider, keys in stored.get("multi_keys", {}).items()
+            }
             os.makedirs(self.data_dir, exist_ok=True)
             fd, tmp_path = tempfile.mkstemp(
                 dir=self.data_dir, suffix=".tmp", prefix="v2_config_"
             )
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(self.config, f, ensure_ascii=False, indent=2)
+                    json.dump(stored, f, ensure_ascii=False, indent=2)
                     f.flush()
                     os.fsync(f.fileno())
                 os.replace(tmp_path, self.config_file)
@@ -161,6 +166,20 @@ class V2ConfigManager:
                 raise
         except OSError as e:
             raise IOError(f"保存 V2 配置失败: {e}") from e
+
+    @staticmethod
+    def _decode_config(stored):
+        if not isinstance(stored, dict) or not isinstance(stored.get("multi_keys", {}), dict):
+            raise ValueError("网关配置格式错误，原文件已保留。")
+        migrate = False
+        for provider, keys in stored.get("multi_keys", {}).items():
+            if not isinstance(keys, list) or any(not isinstance(key, str) for key in keys):
+                raise ValueError("多密钥配置格式错误，原文件已保留。")
+            migrate |= any(key and not key.startswith(PREFIX) for key in keys)
+            stored["multi_keys"][provider] = [
+                unprotect_secret(key) if key.startswith(PREFIX) else key for key in keys
+            ]
+        return stored, migrate
 
     def _save_with_rollback(self, previous: Dict[str, Any]) -> bool:
         """带回滚的保存"""
@@ -184,8 +203,10 @@ class V2ConfigManager:
             try:
                 if os.path.exists(self.config_file):
                     with open(self.config_file, "r", encoding="utf-8") as f:
-                        self.config = json.load(f)
+                        self.config, migrate = self._decode_config(json.load(f))
                     self._merge_defaults()
+                    if migrate:
+                        self._save_config()
                     # 通知监听器
                     self._notify_change(old_config, self.config)
             except Exception:

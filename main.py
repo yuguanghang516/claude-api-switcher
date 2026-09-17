@@ -16,7 +16,8 @@ import shutil
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from app.gui import MainWindow
-from app.single_instance import SingleInstanceGuard
+from app.single_instance import SingleInstanceGuard, isolated_instance_name
+from app.secret_storage import SecretProtectionError
 from app.version import APP_VERSION_NAME
 
 
@@ -52,12 +53,13 @@ def migrate_legacy_config(base_dir: str, data_dir: str):
 
 def main():
     """主函数"""
-    instance_guard = SingleInstanceGuard()
+    state_dir = get_state_dir()
+    instance_guard = (SingleInstanceGuard(isolated_instance_name(state_dir))
+                      if os.environ.get("CLAUDE_SWITCHER_DATA_DIR") else SingleInstanceGuard())
     if not instance_guard.acquire():
         return
     base_dir = get_base_dir()
 
-    state_dir = get_state_dir()
     data_dir = os.path.join(state_dir, "data")
     logs_dir = os.path.join(state_dir, "logs")
 
@@ -72,6 +74,10 @@ def main():
     try:
         app = MainWindow(data_dir, logs_dir)
         app.run()
+    except SecretProtectionError:
+        from tkinter import messagebox
+        messagebox.showerror("无法读取本地密钥", "无法解密本地网关密钥，原配置已保留。\n"
+                             "请使用原 Windows 账户打开软件，或恢复该账户下的配置备份。")
     finally:
         instance_guard.release()
 

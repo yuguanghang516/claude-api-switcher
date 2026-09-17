@@ -12,7 +12,7 @@ import webbrowser
 from datetime import datetime
 from typing import Optional, List, Dict
 
-import customtkinter as ctk
+from . import ui_widgets as ctk
 from tkinter import messagebox
 
 from .i18n import t
