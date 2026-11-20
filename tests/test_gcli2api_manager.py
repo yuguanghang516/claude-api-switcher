@@ -434,6 +434,10 @@ def test_detect_dns_failure(monkeypatch, manager):
 def test_detect_installed_but_stopped(monkeypatch, manager):
     manager.install_dir.mkdir(parents=True)
     (manager.install_dir / "web.py").touch()
+    (manager.install_dir / "pyproject.toml").touch()
+    python_exe = manager.install_dir / ".venv" / "Scripts" / "python.exe"
+    python_exe.parent.mkdir(parents=True)
+    python_exe.touch()
 
     def raise_refused(*args, **kwargs):
         raise requests.exceptions.ConnectionError("connection refused")
@@ -442,6 +446,9 @@ def test_detect_installed_but_stopped(monkeypatch, manager):
     status = manager.detect()
     assert status.state == "stopped"
     assert status.installed
+    python_exe.unlink()
+    incomplete = manager.detect()
+    assert not incomplete.installed and incomplete.error_code == "incomplete_install"
 
 
 def test_dependency_commands_use_fixed_ids_and_no_shell(monkeypatch, manager):

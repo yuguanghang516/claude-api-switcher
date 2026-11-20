@@ -1,10 +1,10 @@
-# Claude API Switcher V4.6.3
+# Claude API Switcher V4.6.5
 
 一个面向 Windows 的 Claude Code API 管理器。它能切换第三方 API、启动 Claude Code、管理本地 AI Gateway，也能在没有 Claude Code 环境时完成检测、安装和 PATH 修复。
 
-最终用户直接运行 `Claude API Switcher V4.6.3.exe`，不需要 Python。
+最终用户直接运行 `Claude API Switcher V4.6.5.exe`，不需要 Python。
 
-V4.6.3 修复网关流式错误误判、用量遗漏、Anthropic 地址拼接和密钥明文存储，并改善下拉箭头、卡片圆角和帮助按钮。详见 [更新说明](docs/releases/v4.6.3.md)，下载见 [GitHub Releases](https://github.com/yuguanghang516/claude-api-switcher/releases/tag/v4.6.3)。
+V4.6.5 改进 Gemini 反代安装检测和连接错误提示，包含 V4.6.4 的网关修复。[查看更新说明](docs/releases/v4.6.5.md)
 
 ## 能做什么
 
@@ -52,7 +52,7 @@ V4.6.3 修复网关流式错误误判、用量遗漏、Anthropic 地址拼接和
 
 ### 使用已打包的 EXE
 
-1. 从 [GitHub Releases](https://github.com/yuguanghang516/claude-api-switcher/releases/tag/v4.6.3) 下载 `Claude API Switcher V4.6.3.exe`。
+1. 从 [V4.6.5 发布页](https://github.com/yuguanghang516/claude-api-switcher/releases/tag/v4.6.5) 下载 Windows EXE。
 2. 退出旧版后双击运行新版。
 3. 在“API 切换”页添加或编辑供应商。
 4. 填写 API 地址、模型、API Key 和认证方式。
@@ -65,7 +65,7 @@ V4.6.3 修复网关流式错误误判、用量遗漏、Anthropic 地址拼接和
 %LOCALAPPDATA%\ClaudeAPISwitcher
 ```
 
-V4.6.3 首次启动会加密迁移本地网关密钥。迁移后请继续使用新版，不要用旧版覆盖保存同一份网关配置；加密数据不能直接搬到另一台电脑或其他 Windows 账户。详细说明见 [升级注意事项](docs/releases/v4.6.3.md#密钥与升级注意事项)。
+V4.6.5 首次启动会加密迁移本地网关密钥。迁移后请继续使用新版，不要用旧版覆盖保存同一份网关配置；加密数据不能直接搬到另一台电脑或其他 Windows 账户。详细说明见 [升级注意事项](docs/releases/v4.6.3.md#密钥与升级注意事项)。
 
 ## Gemini 反代（gcli2api）
 

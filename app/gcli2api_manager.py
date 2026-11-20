@@ -338,6 +338,9 @@ class Gcli2ApiManager:
             except OSError as exc:
                 return False, f"无法启动 Git：{self._redact(str(exc))}"
             if result.returncode != 0:
+                detail = (result.stderr or "").lower()
+                if "repository not found" in detail or "error: 404" in detail:
+                    return False, "GitHub 找不到 gcli2api 上游仓库或当前账号无权访问。已有完整安装可通过 GCLI2API_HOME 指定目录后重新检测。"
                 return False, self._command_error("下载 gcli2api", result)
 
         progress("正在同步 gcli2api 依赖…")
@@ -455,7 +458,7 @@ class Gcli2ApiManager:
         base = {
             "base_url": self.base_url,
             "install_dir": self.install_dir,
-            "installed": (self.install_dir / "web.py").is_file(),
+            "installed": self.is_local and self._is_complete_install(self.install_dir),
             "version": self._version(),
         }
         base.update(changes)
@@ -765,9 +768,15 @@ class Gcli2ApiManager:
             if any(marker in detail for marker in ("getaddrinfo", "name resolution", "enotfound")):
                 return self._status(state="error", error_code="dns", mode=mode,
                                     message="找不到服务器；请检查地址、网络或 DNS")
-            if (self.install_dir / "web.py").is_file() and self.is_local:
+            if not self.is_local:
+                return self._status(state="error", error_code="connection_refused", mode=mode,
+                                    message="远程 gcli2api 无法连接，请核对地址、端口及远程服务状态")
+            if self._is_complete_install(self.install_dir):
                 return self._status(state="stopped", error_code="connection_refused", mode=mode,
                                     message="gcli2api 已安装，但服务未启动")
+            if (self.install_dir / "web.py").is_file():
+                return self._status(state="not_installed", error_code="incomplete_install", mode=mode,
+                                    message="发现 gcli2api 源码，但项目文件或 Python 环境不完整。请执行一键安装以检查并修复依赖。")
             return self._status(state="not_installed", error_code="connection_refused", mode=mode,
                                 message="未检测到 gcli2api 服务")
         except requests.exceptions.RequestException:

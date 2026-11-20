@@ -19,6 +19,7 @@ from .client_source import classify_client_source
 from .gcli_failover import GcliModelFailover
 from .api_urls import anthropic_messages_url
 from .upstream_stream import relay_sse, usage_counts
+from .request_validation import request_error
 
 
 # 支持的供应商及其默认配置
@@ -141,8 +142,9 @@ class GatewayServer:
             payload = request.get_json(force=True)
         except Exception:
             return jsonify({"error": {"type": "invalid_request_error", "message": "无效的 JSON 请求"}}), 400
-        if not isinstance(payload, dict) or not payload.get("messages"):
-            return jsonify({"error": {"type": "invalid_request_error", "message": "消息列表为空"}}), 400
+        error = request_error(payload)
+        if error:
+            return jsonify({"error": {"type": "invalid_request_error", "message": error}}), 400
         stream = bool(payload.get("stream"))
         requested_model = str(payload.get("model") or "")
         try:
@@ -290,8 +292,9 @@ class GatewayServer:
         except Exception:
             return jsonify({"error": {"message": "无效的 JSON 请求", "type": "invalid_request_error"}}), 400
 
-        if not isinstance(data, dict):
-            return jsonify({"error": {"message": "JSON 请求必须是对象", "type": "invalid_request_error"}}), 400
+        error = request_error(data)
+        if error:
+            return jsonify({"error": {"message": error, "type": "invalid_request_error"}}), 400
 
         model_name = data.get("model", "")
         messages = data.get("messages", [])

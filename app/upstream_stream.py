@@ -85,5 +85,8 @@ def relay_sse(response, protocol, completed):
             "type": "upstream_error", "message": error}}, ensure_ascii=False)
         yield f"event: error\ndata: {body}\n\n"
     finally:
-        response.close()
-        completed(incoming, outgoing, total, status, error)
+        try:
+            response.close()
+        finally:
+            # Closing a broken socket must not suppress the request's usage/log.
+            completed(incoming, outgoing, total, status, error)
